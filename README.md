@@ -2,13 +2,13 @@
 
 4 自由度机械臂控制板：**4 个与底盘同型号的闭环减速电机**，跑 **25 kHz 硬实时闭环**；接收 MoveIt 下发的关节轨迹并执行，回报关节角。
 
-工作区总览看 [`../README.md`](../README.md)，行为约束看 [`../AGENTS.md`](../AGENTS.md)，**分层设计看 [`../docs/architecture.md`](../docs/architecture.md)**，**协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)**。本文件只讲**这个工程**。
+行为约束看本仓 [`AGENTS.md`](AGENTS.md)，**分层设计看 `docs/PROTOCOL.md`（见 docs/PROTOCOL.md 与 AGENTS.md）**，**协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)**。本文件只讲**这个工程**。
 
 **新成员先读 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)**（含机械臂特有的三条安全红线）。
 
 ### 仓库结构
 
-本目录是**独立 git 仓**（`Drivers/`、`Middlewares/` 已入库，可单独 clone 构建）：`docs/QUICKSTART.md` 上手指南；`docs/PROTOCOL.md`、`docs/BOARD-C30D.md`、`docs/protocol-signals.yaml`、`docs/gen/can_protocol.h`、`tools/can_check.py` **均为 `../tools/sync_docs.py` 同步来的产物，不要在本仓改**（只改工作区根的那一份再同步）。
+本目录是**独立 git 仓**（`Drivers/`、`Middlewares/` 已入库，可单独 clone 构建）。文档：`docs/QUICKSTART.md` 上手、`docs/PROTOCOL.md` 协议 v3、`docs/BOARD-C30D.md` 板级真相、`AGENTS.md` 本仓约束。协议与板级文档在两个 MCU 仓各存一份，**改动时同一批同步另一仓**（手工 cp，无工具）。
 
 ---
 
@@ -40,21 +40,21 @@
 | 轨迹插值 | 本板 L3 | ✅ `app_traj`：把 100 Hz 的 MoveIt 目标点铺成 25 kHz 位置参考 |
 | 本地安全兜底 | 本板 L4 | ✅ `app_limit`：限位、急停锁存、断流超时、堵转 |
 
-分层细节与模块清单见 [`../docs/architecture.md`](../docs/architecture.md) §3；L1 驱动 / L2 实时 / L4 安全 / L5 通信 与底盘**共用同一份源码**（`../platform/`，Phase 3 建立），板级差异收在每工程各一份的 `board_c30d.h`。
+分层细节与模块清单见 `docs/PROTOCOL.md`（见 docs/PROTOCOL.md 与 AGENTS.md） §3；L1 驱动 / L2 实时 / L4 安全 / L5 通信 与底盘**共用同一份源码**（`../platform/`，Phase 3 建立），板级差异收在每工程各一份的 `board_c30d.h`。
 
 ---
 
 ## 3. 构建与烧录（与底盘工程逐字相同）
 
 ```bash
-. ../env/activate.sh                 # Windows: . ..\env\activate.ps1
+. ./env/activate.sh                 # Windows: . .\env\activate.ps1
 cmake --preset Debug && cmake --build --preset Debug
 # → build/Debug/vehical_rak_arm.{elf,hex,bin,map}（hex/bin 由顶层 CMakeLists.txt 的 POST_BUILD 生成）
 
 STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm.hex -v -rst
 ```
 
-烧录后必须**真断电冷启动**并确认 `build_tag`（[`../AGENTS.md`](../AGENTS.md) §5）。
+烧录后必须**真断电冷启动**并确认 `build_tag`（[`AGENTS.md`](AGENTS.md) §5）。
 
 ---
 
@@ -67,7 +67,7 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 | 关节执行器 | **4 个与底盘同型号的闭环减速电机（MG513P30_12V，30:1）**，**不是舵机** | 用户 2026-10-02 确认（修正上一轮"4 关节电机 + 步进"的含糊说法） |
 | 控制频率 | 同样 **25 kHz 硬实时闭环**；**底座旋转额外用 1 个步进电机**（1 kHz 位置环，不进 25 kHz） | 同上 + 设计草案第二份 |
 | 底板 | **与底盘完全同一块 C30D**（板载 4 路 AT8236 + 板载 CAN 收发器），只是角色不同 | 用户确认 |
-| 步进脉冲引脚 | **PC6 = TIM8_CH1**（脉冲）+ 任一空闲 GPIO（方向）；驱动器外接，不占板载 AT8236 通道 | [`../docs/board-c30d.md`](../docs/board-c30d.md) §4：板上 **PC6-9 + PB14/15 = TIM8/TIM12 航模/舵机接口**，来路是官方资源分配 PDF |
+| 步进脉冲引脚 | **PC6 = TIM8_CH1**（脉冲）+ 任一空闲 GPIO（方向）；驱动器外接，不占板载 AT8236 通道 | [`docs/BOARD-C30D.md`](docs/BOARD-C30D.md) §4：板上 **PC6-9 + PB14/15 = TIM8/TIM12 航模/舵机接口**，来路是官方资源分配 PDF |
 | 夹爪/关节之外无电流采样 | 全板**没有通道电流采样** → 草案的"电流检测"不能直接做，堵转改用软件判据 | 同上 §3 |
 
 **仍需确认（配 CubeMX 前逐条落实，落实一条就写回本表）**：
@@ -77,7 +77,7 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 | 1 | 夹爪用什么驱动？板载只有 **4 路** AT8236，已被 4 个关节占满 → 夹爪接哪里（舵机口 PB14/TIM12？预留 IO + 小驱动芯片？还是根本没有夹爪） | 决定第 5 路输出的物理来源；不定则 Phase B 外设配不完 |
 | 2 | 步进**驱动器型号**与细分设定、方向/使能脚选哪几个空闲 IO、有无编码器反馈（草案说"定时器计数脉冲数"——那是**开环**，没有真实位置） | 决定 `app_step` 能不能做位置闭环、`0x102` 的底座角是否只是推算值 |
 | 3 | 关节有无限位开关 / 回零基准（限位、霍尔，还是靠电流特征——但本板无电流采样） | 决定上电流程。**禁止上电自动动作**（§7），这条不定就不能写启动序列；也决定 `ARM_JOINT_CMD_*` 的角度零点与 MoveIt 的 URDF 原点 |
-| 4 | 臂断电/停机时会不会自落（无抱闸 + 30:1 齿隙） | 直接决定协议里"断流保持位置"这条安全语义能不能真做到（[`../docs/protocol.md`](../docs/protocol.md) §7.2） |
+| 4 | 臂断电/停机时会不会自落（无抱闸 + 30:1 齿隙） | 直接决定协议里"断流保持位置"这条安全语义能不能真做到（[`docs/PROTOCOL.md`](docs/PROTOCOL.md) §7.2） |
 | 5 | 供电拓扑：动力与逻辑是否分开、共地、每关节峰值电流 | 底盘台架期已被 2.89 V 过放坑过一次；臂堵转时电流更大 |
 | 6 | 关节角反馈只在电机端（无输出端绝对位置）→ MoveIt 的位置精度靠什么保证 | 30:1 齿隙 + 编码器在输入侧 ⇒ 输出角有迟滞；决定要不要单向趋近策略与零位标定 |
 
@@ -89,7 +89,7 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 
 ## 5. 协议角色（本板侧）
 
-规范件是 [`../docs/protocol.md`](../docs/protocol.md) v3，机器可读定义是 [`../docs/protocol-signals.yaml`](../docs/protocol-signals.yaml)。**本表只列本工程收发的帧，不重复字节布局**：
+规范件是 [`docs/PROTOCOL.md`](docs/PROTOCOL.md) v3，机器可读定义是 [`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)。**本表只列本工程收发的帧，不重复字节布局**：
 
 | ID | 方向 / 频率 | 本工程职责 |
 | --- | --- | --- |
@@ -103,7 +103,7 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 | `0x021` `EMCY_ARM` | 臂→广播，事件 | 故障上报（首发 ≤10 ms，重发 3 次） |
 | `0x231` `NODE_INFO_ARM` | 臂→广播 | 上电 1 次 + 1 Hz：协议版本 + 固件构建标识 |
 
-关键点（与草案不同的三处，见 [`../docs/protocol.md`](../docs/protocol.md) §3/§7）：
+关键点（与草案不同的三处，见 [`docs/PROTOCOL.md`](docs/PROTOCOL.md) §3/§7）：
 
 1. **字节序是小端（Intel）**，不是草案写的"大端"；每帧带 **4 bit 滚动计数器 + CRC8（初值=本帧 Data ID）**。
 2. **断流动作不对称**：`0x101/0x102` 断流 100 ms → **保持当前关节位置**（不回落、不回零），而不是"自动停止"。能否真做保持取决于 §4 #4。
@@ -138,8 +138,8 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 执行器定为闭环减速电机后，**主参照从参考课设的 `arm/` 层转到 `chassis/` 层**（它控的就是同一类电机）：
 
 - 最大头的复用：**`../platform/` 共用层**（L1 驱动 + L2 25 kHz 闭环），从底盘抽出来直接拿。
-- [`../car2/tools/references/smart-transport-robot/01_课程设计-智能搬运机器人/代码/chassis/`](../car2/tools/references/smart-transport-robot/01_课程设计-智能搬运机器人/代码/chassis/)：`motor_ctrl.c`（双输入驱动）、`calib.c`（含“架空时 MG513 需 ~75% 挣脱”的实测注释）、编码器 PID 思路。
-- [`代码/arm/`](../car2/tools/references/smart-transport-robot/01_课程设计-智能搬运机器人/代码/arm/)（`servo.c` + `arm_task.c`）：**位姿表 / 动作链 / 夹爪状态独立跟踪 / 分步插值防甩的结构可参考**；但它是**舵机角度↔脉宽（500–2500 µs）**模型，与本工程不同，**驱动层不能直接搬**。
+- `tools/references/smart-transport-robot/01_课程设计-智能搬运机器人/代码/chassis/`（car2 台架归档，未纳入本仓）：`motor_ctrl.c`（双输入驱动）、`calib.c`（含“架空时 MG513 需 ~75% 挣脱”的实测注释）、编码器 PID 思路。
+- `tools/references/smart-transport-robot/01_课程设计-智能搬运机器人/代码/arm/`（car2 台架归档，未纳入本仓）（`servo.c` + `arm_task.c`）：**位姿表 / 动作链 / 夹爪状态独立跟踪 / 分步插值防甩的结构可参考**；但它是**舵机角度↔脉宽（500–2500 µs）**模型，与本工程不同，**驱动层不能直接搬**。
 - `代码/tools/arm_teach.py`、`armjog.py`：上位机示教与单轴点动的工具思路（本工程的等价物 = SWD 邮箱或 CAN 下发）。
 - ⚠️ 参考代码的逻辑做过 host 测试，但**所有角度/增益是占位值且没上实机**；它是 Keil/自建 bsp 结构，移植要重写为 HAL + CubeMX，不要整段拷贝。
 

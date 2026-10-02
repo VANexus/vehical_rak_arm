@@ -26,7 +26,7 @@
 ## 2. 工具链与环境（与底盘逐字相同）
 
 ```bash
-. ../env/activate.sh          # Linux/macOS；Windows: . ..\env\activate.ps1
+. ./env/activate.sh          # Linux/macOS；Windows: . .\env\activate.ps1
 cmake --preset Debug && cmake --build --preset Debug
 # → build/Debug/vehical_rak_arm.{elf,hex,bin,map}；Debug 基线 FLASH 16 140 B / RAM 43 400 B
 STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm.hex -v -rst
@@ -58,6 +58,6 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 | [`docs/protocol-signals.yaml`](protocol-signals.yaml) | 协议机器可读单一来源 |
 | [`docs/BOARD-C30D.md`](BOARD-C30D.md) | 板级资源表（步进脉冲的合法落点：PC6=TIM8_CH1） |
 | [`docs/gen/can_protocol.h`](gen/can_protocol.h) | 生成的帧宏 |
-| 工作区根 [`../AGENTS.md`](AGENTS.md) | 跨端工具链与工程纪律 |
+| 工作区根 [`AGENTS.md`](../AGENTS.md) | 跨端工具链与工程纪律 |
 
-⚠️ `docs/PROTOCOL.md`、`docs/BOARD-C30D.md`、`docs/protocol-signals.yaml`、`docs/gen/*`、`tools/can_check.py` 是同步产物，**不要在本仓直接改**。
+约定：`docs/PROTOCOL.md`、`docs/BOARD-C30D.md`、`docs/protocol-signals.yaml`、`tools/can_check.py`、`env/activate.*` 在本仓各存一份（与姊妹仓内容保持一致，改动时同一批 `cp` 过去）；`docs/gen/can_protocol.h` 由 `can_check.py --c-header` 生成，不手改。
