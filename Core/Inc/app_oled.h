@@ -1,0 +1,13 @@
+#ifndef APP_OLED_H
+#define APP_OLED_H
+
+#include <stdint.h>
+
+/* [AI]  SSD1306 OLED 调试显示（软 SPI：PD11=DC / PD12=RES / PD13=DAT / PD14=CLK）。
+   惰性初始化：首次调用 oled_show_step 才动 GPIO/时序，不占 boot 路径时间（R3 教训）。
+   机械臂板内容（A1）：y0 = 复位原因/运行秒数/build_tag，y10/20 = 六轴实际角，
+   y30 = 模式机 + 指令流 + 指令异常计数，y40 = Home 安全位自检提示。 */
+
+void oled_show_step(uint32_t now_ms);   /* [AI]  10Hz 任务里调；内部 5Hz 重绘 */
+
+#endif /* APP_OLED_H */

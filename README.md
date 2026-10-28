@@ -1,86 +1,164 @@
-# vehical_rak_edge_ai — 边缘 AI 推理节点固件（STM32F407VET6）
+# vehical_rak_arm — 机械臂板固件（STM32F407VET6 / C30D）
 
-**边缘 AI（BNN/SNN）推理节点**：在轮趣 C30D（STM32F407VET6 + 板载 AT8236）上跑板上推理与本地执行。与运动固件仓 `vehical_rak_motion` **完全同一块板**，只是角色不同（本工程的 `.ioc` 已按边缘 AI 节点所需裁剪，不再是底盘工程的复制品）。
+> **本仓的 git 仓名是历史遗留的 `vehical_rak_edge_ai`**：2026-10-14 曾把「机械臂板」
+> 重命名成「边缘 AI 推理节点」；**2026-10-28 恢复双板架构**，本仓重新担任
+> **机械臂板 `vehical_rak_arm`** 的角色（CMake 工程名、目标产物、`.ioc` 都叫
+> `vehical_rak_arm`）。GitHub 仓名与目录名沿用旧拼写，**不要再改名**（会打断团队链接）。
 
-行为约束看本仓 [`AGENTS.md`](AGENTS.md)，**协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)**，板级真相看 [`docs/BOARD-C30D.md`](docs/BOARD-C30D.md)。本文件只讲**这个工程**。
+本板 = C30D 上的 **6 路舵机机械臂控制器**：接收 Jetson 下发的关节角（CAN v4 `ARM_CMD`），
+换算成舵机脉宽驱动机械臂，并把实测关节角、诊断量回报给 Jetson 与上位机 UI。
+**不做 IK、不做轨迹规划**（那在 Jetson 的 MoveIt）；本板只做「指令角 → 脉宽」的执行 +
+本地安全兜底（急停锁存、指令断流）。
 
-**新成员先读 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)**。
-
-### 仓库结构
-
-本目录是**独立 git 仓**（`Drivers/`、`Middlewares/` 已入库，可单独 clone 构建）。文档：`docs/QUICKSTART.md` 上手、`docs/PROTOCOL.md` 协议 v4、`docs/BOARD-C30D.md` 板级真相、`AGENTS.md` 本仓约束。协议与板级文档在两个 MCU 仓各存一份，**改动时同一批同步另一仓**（手工 cp，无工具）。
+行为约束看本仓 [`AGENTS.md`](AGENTS.md)；协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+（规范件）+ [`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)（机器可读单一来源）；
+板级真相看 [`docs/BOARD-C30D.md`](docs/BOARD-C30D.md)。**新成员先读 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)**。
 
 ---
 
-**远端**：`https://github.com/VANexus/vehical_rak_edge_ai`（private，默认分支 `main`，团队 `RAK-嵌入式开发组` 有 maintain 权限）。
-协作三步：**开工先 `git pull`** → 改动 → **收工 `git add -A && git commit && git push`**；提交前本仓必须 `python3 tools/can_check.py` 与 `cmake --build --preset Debug` 双双零问题。
+## 0. 双板架构（2026-10-28 恢复）
+
+一条 CAN 总线（CAN 2.0A，1 Mbps）挂三个节点，帧 ID 全局唯一：
+
+```
+              CAN 总线 1 Mbps
+   Jetson（rak）┬── 0x100 DRIVE_CMD / 0x010 SAFETY_CMD ── 底盘板 vehical_rak_motion
+                ├── 0x110/0x111 ARM_CMD_A/B / 0x010 ──── 机械臂板 vehical_rak_arm（本仓）
+                ├── 0x200/0x201/0x202 轮遥测 ←────────── 底盘板
+                └── 0x210/0x211/0x221/0x031 臂遥测 ←──── 机械臂板
+```
+
+- **底盘板** `vehical_rak_motion`：4 轮 25 kHz 闭环 + IMU。
+- **机械臂板**（本仓）：6 路舵机 PWM（50 Hz）+ 臂遥测。
+- 舵机指令的**处理板**从底盘板改为本板；**帧 ID 与字节布局一字未动**（同总线 ID 唯一
+  → Jetson 侧零改动）。本板新增自己的两帧上行 `0x031 ARM_NODE_INFO` / `0x221 ARM_DIAG`，
+  避免与底盘板的 `0x030` / `0x220` 同 ID 撞车。协议版本号仍是 **4**。
 
 ---
 
-## 1. 当前状态：CubeMX 骨架，应用代码 0 行
+## 1. 当前状态：A1（首版机械臂板固件）
 
 | 项 | 状态 |
 | --- | --- |
-| CubeMX 生成 | ✅ FW_F4，目标 `STM32F407VETx` |
-| 外设 | ✅ 已按边缘 AI 节点所需**裁剪**（集合见 §2），不再与底盘工程逐字节同构 |
-| Debug / Release 构建 | ✅ 骨架可编译（CubeCLT 14.3.rel1）；裁剪后**本轮未重测** FLASH/RAM 基线 |
-| 应用代码 | ❌ 0 行，尚未开始 |
+| CubeMX 生成 | ✅ FW_F4 V1.28.3，TargetToolchain=CMake（`.ioc` = `vehical_rak_arm.ioc`） |
+| Debug / Release 构建 | ✅ 双预设零警告 |
+| 应用代码 | ✅ A1：6 路舵机 PWM + CAN v4 臂帧收发 + OLED + IWDG；**手术级新写**（`app_arm` / `app_servo` / `app_build` / `app_can` / `app_oled`） |
+| 上板运行 | ⏳ 首版待上板实测（真断电冷启动 + 核对 `build_tag=A1`） |
+| CAN 物理联调 | ⏳ 与底盘板 / Jetson 三节点联调待做（2026-10-29 起） |
 
-## 2. 外设集合（`.ioc` 现状）
-
-| 外设 | 配置 |
-| --- | --- |
-| CAN1 | PD0 = RX / PD1 = TX，**板载收发器**，**1 Mbps**（Prescaler=2，BS1=CAN_BS1_16TQ，BS2=CAN_BS2_4TQ，SJW=CAN_SJW_1TQ） |
-| OLED 128×64 | 软 SPI（纯 GPIO 位操作），PD11 = DC / PD12 = RES / PD13 = DATA / PD14 = CLK（与运动板同款） |
-| motorA | 底部云台电机，同款 **AT8236 闭环减速电机**；PWM = TIM10_CH1(PB8) + TIM11_CH1(PB9) |
-| 编码器 ×1 | TIM2（PA15 / PB3），Encoder Mode TI12 |
-| RTOS | FreeRTOS（CMSIS-RTOS V2），HAL timebase = TIM7 |
-| 时钟 | HSE 8 MHz → PLL(PLLM=4, PLLN=168, PLLQ=7) → 168 MHz；APB1 = 42 MHz，APB2 = 84 MHz |
-| 调试 | SWD（PA13 / PA14） |
-
-其余引脚保持 CubeMX 默认，未启用。
-
-## 3. 架构定位（职责边界）
-
-本板是 C30D 总线上的**边缘 AI 推理节点**：上位机（Jetson `rak`）负责上层规划与调度，本板承担**板上推理 + 本地执行/安全兜底**。两边的具体分工**随应用定，尚未落定**——落定前不要凭印象把职责写进代码注释。
+`build_tag` 单点定义在 [`Core/Src/app_build.c`](Core/Src/app_build.c)，OLED 右上角显示。
 
 ---
 
-## 4. 构建与烧录（与运动固件逐字相同）
+## 2. 外设与舵机地图
+
+| 资源 | 配置 |
+| --- | --- |
+| CAN1 | **PD0 = RX / PD1 = TX**，板载收发器，**1 Mbps**（Prescaler=2，BS1=16TQ，BS2=4TQ，SJW=1TQ；采样点 81.0 %）；RX 中断 `CAN1_RX0_IRQn` |
+| 舵机 PWM | **TIM8 CH1-4 = PC6/PC7/PC8/PC9**，**TIM12 CH1-2 = PB14/PB15**，**50 Hz**（1 µs tick、ARR=19999、脉宽 500~2500 µs） |
+| OLED | 128×64 SSD1306 软 SPI（PD11=DC / PD12=RES / PD13=DAT / PD14=CLK） |
+| 看门狗 | IWDG（10 Hz 任务喂狗；喂不上 → 2 s 复位，OLED `P` 字段显示 `I`） |
+| RTOS | FreeRTOS（CMSIS-RTOS V2），HAL timebase = TIM7 |
+| 时钟 | HSE 8 MHz → PLL(PLLM=4, PLLN=168, PLLP=DIV2) → 168 MHz；APB1 = 42 MHz，APB2 = 84 MHz |
+| 调试 | SWD（PA13 / PA14） |
+
+**轴 ↔ 通道映射（装臂实测接线，单点定义在 `app_arm.c`）**：
+
+| 轴 | J1 腰 | J2 大臂 | J3 肘 | J4 小臂 | J5 腕俯仰 | J6 腕旋转 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 舵机通道 | ch5 | ch4 | ch3 | ch2 | ch1 | ch0 |
+| 引脚 | PB15 | PB14 | PC9 | PC8 | PC7 | PC6 |
+
+- 位置语义：**0~270° 满量程 ↔ 500~2500 µs**；无效轴回 1500 µs 中位。
+- **上电默认位 = Home 安全位**（J1=0°/J2=225°/J3=270°/J4=0°/J5=0°/J6=0° →
+  500/2166/2500/500/500/500 µs），与 `rak` 仓 SRDF home 一致。
+- 协议第 7 轴（夹爪）**本板无硬件通道**，只回显不落地。
+- ⚠️ J1/J6 实测为**连续旋转舵机**，其角度值按「速度偏置」解释（中位=停转）——上位机标定层约定。
+
+> **`.ioc` 现状说明**：`vehical_rak_arm.ioc` 目前与底盘板同构（同一块 C30D 硬件，
+> 外设全集；见下节），因为离线重生成需要 CubeMX 指向 FW_F4 V1.28.3 仓库路径而暂缓。
+> 本板**只启动舵机所需的 TIM8/TIM12 + CAN1**，其余外设在 `main.c` 里 init 但不启动
+> （无输出）。**裁剪 `.ioc` 并重生成 = 待办**（见 §6），属整洁性问题、不影响功能。
+
+## 3. 应用层模块
+
+| 文件 | 职责 |
+| --- | --- |
+| `Core/Src/app_arm.c` | L3 语义层：角度→脉宽换算、轴↔通道映射、急停锁存、指令断流判定、状态位图/模式机 |
+| `Core/Src/app_servo.c` | L1 驱动：6 路舵机 PWM 写 CCR（TIM8/TIM12）+ 读回脉宽；`servo_init` 输出 Home 安全位 |
+| `Core/Src/app_can.c` | L5 通信：v4 臂帧编解码（`0x110/0x111` 下行，`0x210/0x211/0x221/0x031` 上行）；`0x010 SAFETY` e2e 校验在 ISR 内 |
+| `Core/Src/app_oled.c` | L1 调试显示：复位原因/运行秒数/build_tag、6 轴角、模式机/指令流/异常计数、急停提示 |
+| `Core/Src/app_build.c` | 构建标识 `build_tag`（单点定义） |
+
+任务（`Core/Src/freertos.c`）：`canrx`（阻塞队列）、`cantx`（1 kHz 底拍）、`stat`（10 Hz 喂狗 + OLED）、
+`defaultTask`（空转）。**本板无 25 kHz 控制回路**（舵机是纯硬件 PWM）。
+
+---
+
+## 4. 构建与烧录（与底盘固件逐字相同）
 
 ```bash
 . ./env/activate.sh                 # Windows: . .\env\activate.ps1
-cmake --preset Debug && cmake --build --preset Debug
-# → build/Debug/vehical_rak_edge_ai.{elf,hex,bin,map}（hex/bin 由顶层 CMakeLists.txt 的 POST_BUILD 生成）
+cmake --preset Debug   && cmake --build --preset Debug
+cmake --preset Release && cmake --build --preset Release
+# → build/<预设>/vehical_rak_arm.{elf,hex,bin} + .map（hex/bin 由顶层 CMakeLists.txt 的 POST_BUILD 生成）
 
-STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_edge_ai.hex -v -rst
+STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm.hex -v -rst
 ```
 
-烧录后必须**真断电冷启动**并确认 `build_tag`（[`AGENTS.md`](AGENTS.md) §构建/烧录/提交）。
+烧录后必须**真断电冷启动**（电池关 → 拔 ST-LINK → 等 OLED 全黑 → 再上电），
+并以屏上 `build_tag` 判别实际运行版本。**每次有效改动升一档标签**（`A1` → `A2` …）。
 
 ---
 
 ## 5. 通信协议
 
-本仓是 C30D CAN 总线上的一个节点，遵循**共享且已冻结**的协议规范：规范性文字见 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)，机器可读单一来源见 [`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)。其中 `0x010 SAFETY_CMD` 是**广播安全帧**，节点必须响应（急停立即停止并锁存，仅 `CLEAR_ESTOP` 可解）。**不要自己手写编解码**：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`；提代码前 `can_check.py` 必须退出码 0。
+本仓是 C30D CAN 总线上的一个节点，遵循**共享且已冻结**的协议：规范文字见
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md)，机器可读单一来源见
+[`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)。`0x010 SAFETY_CMD` 是**广播安全帧**，
+本板必须响应：`EMERGENCY_STOP`（cmd=4）→ 立即冻结舵机并锁存；`CLEAR_ESTOP`（cmd=5）→ 解锁存。
+
+**不要自己手写帧表**：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`
+（WIP 已接入 `app_can.c`）；提代码前 `can_check.py` 必须退出码 0。
 
 ---
 
 ## 6. 待办
 
-- **Phase A**：确认边缘 AI 节点的应用形态与推理运行时（模型格式、推理库），把结论写回本文件。
-- **Phase B**：在现有 CubeMX 骨架上补应用代码；`platform/` 共用层若已从运动仓抽出则直接复用（L1 驱动 / L5 通信等），否则先按可抽的形状写。
-- **Phase C**：上板实测（架空、真断电冷启动、核对 `build_tag`），把实测数据记进提交说明。
+- **`.ioc` 裁剪 + 重生成**：把 `vehical_rak_arm.ioc` 收敛到舵机板所需外设集
+  （TIM8/TIM12、CAN1、OLED、IWDG、USART1、FreeRTOS），去掉底盘专用的
+  TIM1/3/4/5/6/9/10/11、ADC1、USART3 等；重生成后按 [`docs/CUBEMX-SOP.md`](docs/CUBEMX-SOP.md) 走三步必查。
+  （阻塞点：离线重生成需 CubeMX 仓库路径指向 FW_F4 V1.28.3，当前 `~/STM32Cube/Repository` 多了一层。）
+- **上板实测**：架空 / 装臂后核对 Home 安全位、6 轴方向与满量程、急停冻结语义。
+- **零位标定**：轴零位如何定（当前靠装臂机械零点）。
+- **夹爪**：走第几路、驱动器选型、有无位置反馈（挂起项）。
+- **双板 1 kHz 互锁**：v3 的 `XFER_*` 仍未启用（当前两板各自与 Jetson 对话，无板间互锁）。
 
 ---
 
 ## 7. 本工程的硬规矩
 
-1. **上电绝不自动驱动电机**，必须按键或收到显式指令才动；测试时车轮/负载架空。
-2. 只往 `USER CODE BEGIN xxx` … `USER CODE END xxx` 标记对之间写；新 `.c/.h` 加进**顶层** `CMakeLists.txt`（`cmake/stm32cubemx/CMakeLists.txt` 会被 CubeMX 覆盖）。
-3. ISR 内禁止浮点、除法链、`printf`、阻塞调用；共享数据归 ISR 单一写者，任务只读。
-4. 烧完**真断电冷启动** + 确认 `build_tag`；一次只改一个变量；实测数据记进提交说明。
+1. **上电绝不自动驱动电机/舵机乱甩**——`servo_init` 先输出 Home 安全位；测试时臂下无人。
+2. 只往 `USER CODE BEGIN xxx` … `USER CODE END xxx` 标记对之间写；新 `.c/.h` 加进
+   **顶层** `CMakeLists.txt`（`cmake/stm32cubemx/CMakeLists.txt` 会被 CubeMX 覆盖）。
+3. **外设配置一律由 CubeMX 生成**；应用代码不写寄存器级外设初始化（见 [`docs/CUBEMX-SOP.md`](docs/CUBEMX-SOP.md)）。
+4. ISR 内禁止浮点、除法链、`printf`、阻塞调用；共享数据归 ISR 单一写者，任务只读。
+5. 烧完**真断电冷启动** + 核对 `build_tag`；一次只改一个变量；实测数据记进提交说明。
+6. 注释署名：AI/工具产出注释以 `[AI]` 前缀标记；**用户原有注释永不删除或改写**。
 
 ---
 
-*最后更新：2026-10-11。§1/§2 随 `.ioc` 裁剪同步更新，应用形态落定后写回 §3/§6。*
+## 8. 与姊妹仓的同步约定
+
+`docs/PROTOCOL.md`、`docs/protocol-signals.yaml`、`docs/gen/can_protocol.h`、
+`docs/BOARD-C30D.md`、`tools/can_check.py` **在两个 MCU 仓各存一份**，改动时**同一批**
+把姊妹仓 `vehical_rak_motion` 的那份一起改（手工 `cp`，内容保持一致），并在提交说明里写明。
+
+**远端**：`https://github.com/VANexus/vehical_rak_edge_ai`（private，默认分支 `main`，
+团队 `RAK-嵌入式开发组` 有 maintain）。协作：**开工先 `git pull`** → 改动 →
+**收工 `git add -A && git commit && git push`**；提交前必须 `python3 tools/can_check.py`
+与 `cmake --build --preset Debug / Release` 双双零问题。
+
+---
+
+*最后更新：2026-10-28（恢复机械臂板角色 A1：6 路舵机 + CAN v4 臂帧）。*

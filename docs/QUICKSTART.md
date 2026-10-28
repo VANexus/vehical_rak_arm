@@ -1,4 +1,4 @@
-# 快速上手（边缘 AI 推理节点固件仓）
+# 快速上手（机械臂板固件仓 vehical_rak_arm）
 
 面向新成员（Windows / Linux）。**先读第 0 节再动手**。
 
@@ -6,53 +6,67 @@
 
 ## 0. 这个仓库是什么
 
-`vehical_rak_edge_ai` = **边缘 AI（BNN/SNN）推理节点**的 STM32F407VET6 固件（与运动仓 `vehical_rak_motion` **完全同一块**轮趣 C30D 板，只是角色不同）：在板上跑推理与本地执行。
-当前 `.ioc` 已按边缘 AI 节点所需**裁剪**，只保留：CAN1（PD0/PD1，板载收发器，1 Mbps）、OLED 软 SPI（PD11/PD12/PD13/PD14）、motorA 底部云台电机（PWM = TIM10_CH1/PB8 + TIM11_CH1/PB9）、编码器 ×1（TIM2，PA15/PB3）、FreeRTOS（CMSIS-RTOS V2）、HSE 8 MHz → 168 MHz。其余引脚保持 CubeMX 默认。
+`vehical_rak_arm`（git 仓名历史遗留为 `vehical_rak_edge_ai`）= 轮趣 C30D（STM32F407VET6）
+上的 **6 路舵机机械臂控制器**固件。与底盘仓 `vehical_rak_motion`（4 轮 25 kHz 闭环 + IMU）
+**完全同一块硬件**，只角色不同；上位机是 `VANexus/rak`（Jetson，负责 IK/轨迹规划）。
 
-**当前进度**：CubeMX 骨架能编译，**应用代码 0 行**。
+三节点同挂一条 **CAN 2.0A @1 Mbps** 总线：Jetson + 底盘板 + 机械臂板（本仓）。
+
+**当前进度**：**A1**（首版机械臂板固件）——6 路舵机 PWM（TIM8 4 路 / TIM12 2 路 @50 Hz）
++ CAN v4 臂帧收发 + OLED + IWDG + FreeRTOS；Debug/Release 双预设零警告；**待上板实测**。
+`build_tag` 单点定义在 `Core/Src/app_build.c`。
 
 ## 1. 本仓硬规矩
 
 | 规则 | 说明 |
 | --- | --- |
-| **上电绝不自动驱动电机** | 必须按键或收到显式指令才动；测试时架空 |
+| **上电先出 Home 安全位** | `servo_init()` 输出 500/2166/2500/500/500/500 µs；测试时臂行程内不得有人/物 |
+| **急停 = 冻结** | `0x010 SAFETY_CMD` 的 `EMERGENCY_STOP` 锁存后拒绝落地 ARM 指令（舵机保持当前位置） |
 | **1 Mbps CAN 必须 HSE 8 MHz** | HSI 精度不够，1 Mbps 会偶发错误帧，极难定位 |
 | **ISR 内禁止浮点/除法/`printf`/阻塞** | 共享数据归 ISR 单一写者，任务只读 |
+| **不做 IK/轨迹规划** | 那在 Jetson 的 MoveIt；本板只做「指令角 → 脉宽」+ 本地安全兜底 |
 
-## 2. 工具链与环境（与运动仓逐字相同）
+## 2. 工具链与环境（与底盘仓逐字相同）
 
 ```bash
 . ./env/activate.sh          # Linux/macOS；Windows: . .\env\activate.ps1
-cmake --preset Debug && cmake --build --preset Debug
-# → build/Debug/vehical_rak_edge_ai.{elf,hex,bin,map}
-STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_edge_ai.hex -v -rst
+cmake --preset Debug   && cmake --build --preset Debug
+cmake --preset Release && cmake --build --preset Release
+# → build/<预设>/vehical_rak_arm.{elf,hex,bin,map}
+STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm.hex -v -rst
 ```
 
-只需 **STM32CubeCLT 1.22.0**（Linux 已在 `/opt/st/stm32cubeclt_1.22.0`）。两端版本必须一致，比对不要比字节，比 `.map` 的 section 与上板行为。
+只需 **STM32CubeCLT 1.22.0**（Linux 已在 `/opt/st/stm32cubeclt_1.22.0`）。
+跨端比对用 **`.bin`/`.hex` 的 SHA-256**（CubeCLT 14.3.rel1 两端逐字节相同）；**不要比 `.elf`**（内嵌绝对路径）。
 
 ## 3. 代码结构约定
 
-- 业务代码放 `Core/Src/app_*.c`；与运动仓同构的部分（L1 驱动 / L5 通信等）来自 `platform/`（两仓共用，尚未抽出）。
+- 应用代码在 `Core/Src/app_*.c`：`app_arm`（语义）/`app_servo`（舵机驱动）/`app_can`（通信）/
+  `app_oled`（调试显示）/`app_build`（构建标识）。**外设配置一律走 CubeMX**（见 `docs/CUBEMX-SOP.md`）。
 - 新文件加进**顶层** `CMakeLists.txt`（`cmake/stm32cubemx/` 那份会被 CubeMX 覆盖）。
 - 只在 `USER CODE BEGIN/END` 标记对之间写。
-- 帧宏不要手写：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`；提交前 `python3 tools/can_check.py` 必须退出码 0。
+- 帧宏不要手写：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`；
+  提交前 `python3 tools/can_check.py` 必须退出码 0。
 
 ## 4. 上板检查清单
 
-1. **先架空**，第一次跑不要带负载；
+1. **先架空 / 臂行程内无人**，第一次跑不要带负载；
 2. 烧完**真断电冷启动**（电池关 → 拔 ST-LINK → 等 OLED 全黑 → 上电），屏上确认 `build_tag`；
-3. 量动力端子电压再上电（曾被 2.89 V 过放坑成"假软件故障"）；
-4. 每次实测记录：`.bin` SHA-256、供电电压、终态、目视现象。
+3. 确认 6 路舵机停在上电 Home 安全位（未收到指令前不应乱甩）；
+4. 每次实测记录：`.bin` SHA-256、供电电压、六轴终态、目视现象。
 
 ## 5. 文档索引
 
 | 文件 | 作用 |
 | --- | --- |
-| [`README.md`](../README.md) | 本仓现状、外设集合、通信协议角色、待办 |
+| [`README.md`](../README.md) | 本仓现状、舵机地图、双板架构、待办 |
 | [`docs/PROTOCOL.md`](PROTOCOL.md) | CAN 协议 v4 规范（帧表、超时矩阵、故障码） |
 | [`docs/protocol-signals.yaml`](protocol-signals.yaml) | 协议机器可读单一来源 |
 | [`docs/BOARD-C30D.md`](BOARD-C30D.md) | 板级资源表（CAN1 = PD0/PD1 板载收发器；无电流采样） |
 | [`docs/gen/can_protocol.h`](gen/can_protocol.h) | 生成的帧宏 |
+| [`docs/CUBEMX-SOP.md`](CUBEMX-SOP.md) | 改外设前必读 |
 | 工作区根 [`AGENTS.md`](../AGENTS.md) | 跨端工具链与工程纪律 |
 
-约定：`docs/PROTOCOL.md`、`docs/BOARD-C30D.md`、`docs/protocol-signals.yaml`、`tools/can_check.py`、`env/activate.*` 在本仓各存一份（与姊妹仓内容保持一致，改动时同一批 `cp` 过去）；`docs/gen/can_protocol.h` 由 `can_check.py --c-header` 生成，不手改。
+约定：`docs/PROTOCOL.md`、`docs/BOARD-C30D.md`、`docs/protocol-signals.yaml`、
+`docs/gen/can_protocol.h`、`tools/can_check.py`、`env/activate.*` 在本仓各存一份
+（与姊妹仓内容保持一致，改动时同一批 `cp` 过去）。

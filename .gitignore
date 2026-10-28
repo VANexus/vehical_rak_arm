@@ -28,3 +28,13 @@ __pycache__/
 
 # 注意：docs/gen/can_protocol.h 虽是生成物，但要提交，
 # 这样单独 clone 本仓的人不用先拿到工作区根的 docs/ 就能编译。
+
+# 板级权威资料包（WHEELTEC 官方，626 MB）——本地资源，不入库（见 AGENTS.md §1/§4）。
+# 单独 clone 本仓的人需自行向团队索取该 zip 才能复核板级事实。
+docs/*.zip
+
+# platform/ = vehical_rak_platform（L1/L2/L4/L5 共用层）的 submodule 工作树。
+# 2026-10-28 尚未登记进本仓索引（无 .gitmodules、无 gitlink），CMake 也还没引用，
+# 属 Phase 3 才接线的工作。为避免被误当成普通目录提交成 gitlink，此处先排除；
+# 正式接线时按 platform/README.md 走 `git submodule add`，并删除本条目。
+platform/
