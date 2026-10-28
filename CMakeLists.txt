@@ -44,18 +44,45 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
+    # ---- 本仓应用层（L3 解算 + 内容层；见 docs/architecture.md §3）----
+    Core/Src/app_build.c
+    Core/Src/app_oled_render.c
+    Core/Src/app_serial.c
+    Core/Src/app_bt.c
+    Core/Src/app_tft.c
+    Core/Src/app_ui.c
+    Core/Src/app_ui_pages.c
+    Core/Src/app_hooks.c
+
+    # ---- platform/ 共用层（L1 驱动；submodule，两个 MCU 仓共用同一份源码）----
+    platform/Src/app_oled.c
 )
 
 # Add include paths
+# 顺序要紧：Core/Inc 放前面，让本仓的 board_c30d.h 覆盖 platform/ 的默认值
+# （docs/architecture.md §4）。
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
+    Core/Inc
+    platform/Inc
+    Middlewares/Third_Party/LVGL
+    Middlewares/Third_Party/LVGL/include
+    Middlewares/Third_Party/LVGL/src
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
+    # 让 LVGL 从 include 路径找 lv_conf.h（本工程放 Core/Inc/lv_conf.h）
+    LV_CONF_INCLUDE_SIMPLE
 )
+
+# ---------------------------------------------------------------------------
+# LVGL v9.6.0（vendored，见 Middlewares/Third_Party/LVGL/LICENCE.txt）
+# 用 GLOB 收源文件：LVGL 的 .c 分布在 src/ 下 19 个子目录，逐条列举既长又
+# 会在升级版本时漏掉新文件。新增/删除文件后需重新 configure（CMake 限制）。
+# ---------------------------------------------------------------------------
+file(GLOB_RECURSE LVGL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/LVGL/src/*.c)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${LVGL_SOURCES})
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

@@ -25,7 +25,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app_oled_render.h"
+#include "app_bt.h"
+#include "app_tft.h"
+#include "app_ui.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,7 +54,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -114,10 +117,22 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  bt_init();
+
+  /* 外部 ST7735S：面板初始化 + LVGL 起来 */
+  tft_init();
+  tft_fill(TFT_RGB565(0, 0, 0));     /* 清屏，避免上电残影 */
+  ui_init();
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    uint32_t now = HAL_GetTick();
+    bt_step(now);          /* 排空两路串口 RX + 周期上报状态帧 */
+    ui_step(now);          /* LVGL 定时器与重绘（含阻塞 SPI flush，可能占 ~8ms/次） */
+    ui_key_poll();         /* PE0 按键（EXTI 使能后走回调置标志，这里消费） */
+    oled_show_step(now);   /* 内部限流 5Hz；推屏阻塞 ~1ms */
+    osDelay(1);            /* 1ms 外循环：轮询收数需要够快（115200 下 ~11.5 B/ms） */
   }
   /* USER CODE END StartDefaultTask */
 }

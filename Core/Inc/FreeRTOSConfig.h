@@ -165,6 +165,14 @@ standard names. */
 
 /* USER CODE BEGIN Defines */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
+
+/* 栈溢出检测（方法 2 = 检查栈末端魔数）。
+ * 本工程 LVGL 渲染吃栈大，而任务栈是从 FreeRTOS 堆里分的 —— 静默溢出会踩坏
+ * 相邻的 TCB，表现为**没有 HardFault** 的调度器卡死（实测踩过：PC 停在
+ * vTaskDelay 里的死循环、uwTick 冻结）。开了它就会走 vApplicationStackOverflowHook。 */
+#define configCHECK_FOR_STACK_OVERFLOW 2
+/* 堆耗尽也要报出来 —— heap_4 分配失败默认只会返回 NULL，静默 */
+#define configUSE_MALLOC_FAILED_HOOK 1
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */

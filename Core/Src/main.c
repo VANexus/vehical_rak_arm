@@ -20,7 +20,9 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "can.h"
+#include "spi.h"
 #include "tim.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -94,8 +96,39 @@ int main(void)
   MX_TIM11_Init();
   MX_CAN1_Init();
   MX_TIM2_Init();
+  MX_USART2_UART_Init();
+  MX_SPI3_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* ------------------------------------------------------------------
+   * 外部 ST7735S 软 SPI 的 3 个引脚：PC5=SCK / PC3=MOSI / PA7=CS
+   * （DC=PC0 / RST=PC1 / BLK=PC2 已由 MX_GPIO_Init 配好）
+   *
+   * ⚠️ 按 CUBEMX-SOP §1，GPIO 方向本该在 CubeMX 里配。但这三个脚用
+   *    `-q` 脚本 `set pin <脚> GPIO_Output` 会返回 OK 却**写不进 .ioc**
+   *    （2026-10-14 实测；同一份 .ioc 上 PC11 却能写进去）。
+   *    USER CODE 块在 CubeMX 重新生成时不会被清除，所以放这里功能可用。
+   *
+   * 正式做法：在 CubeMX GUI 里把这 3 个脚设为 GPIO_Output（VERY_HIGH），
+   * 重新生成后它们会出现在 gpio.c 的自动区，那时**删掉本段**。
+   * ------------------------------------------------------------------ */
+  {
+    GPIO_InitTypeDef tft = {0};
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
 
+    tft.Mode  = GPIO_MODE_OUTPUT_PP;
+    tft.Pull  = GPIO_NOPULL;
+    tft.Speed = GPIO_SPEED_FREQ_VERY_HIGH;   /* 软 SPI 靠翻转速率吃饭 */
+    tft.Pin   = GPIO_PIN_5 | GPIO_PIN_3;     /* PC5=SCK, PC3=MOSI */
+    HAL_GPIO_Init(GPIOC, &tft);
+    tft.Pin   = GPIO_PIN_7;                  /* PA7=CS */
+    HAL_GPIO_Init(GPIOA, &tft);
+
+    /* SPI Mode 0：SCK 空闲为低；CS 拉高（不选中） */
+    GPIOC->BSRR = (1UL << (5 + 16U)) | (1UL << (3 + 16U));
+    GPIOA->BSRR = (1UL << 7);
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -164,6 +197,16 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/* PE0 用户按键（GPXTI0）：HAL 回调只置标志，LVGL 消费在 defaultTask。
+ * NVIC 使能待 CubeMX GUI 勾选（SOP：无头脚本设不了 NVIC）；
+ * 使能前该回调不会被调用，ui_key_poll() 轮询路径兜底。 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == GPIO_PIN_0) {
+    ui_key_irq_notify();
+  }
+}
 
 /* USER CODE END 4 */
 
