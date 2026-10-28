@@ -14,6 +14,7 @@
 #include "app_can.h"
 #include "app_arm.h"
 #include "app_build.h"
+#include "app_joint.h"
 #include "main.h"
 #include "can.h"
 #include "can_protocol.h"
@@ -35,6 +36,7 @@ struct can_frame {
 
 static QueueHandle_t rx_queue;
 static volatile uint8_t  can_clear_req;   /* SAFETY CLEAR_ESTOP 请求（ISR 置位，任务落地） */
+static volatile uint8_t  can_clear_fault_req;  /* [AI] A2: SAFETY CLEAR_FAULT（复位 J1/J2 位置环故障） */
 static volatile uint8_t  busoff_cnt;
 static CAN_FilterTypeDef can_flt_saved;
 
@@ -117,7 +119,10 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
                 case 5U:                                  /* CLEAR_ESTOP */
                     can_clear_req = 1U;                   /* 任务侧落地 */
                     break;
-                default:                                  /* 6/7（CLEAR_FAULT/SOFT_RESET）：臂板不做 */
+                case 6U:                                  /* CLEAR_FAULT */
+                    can_clear_fault_req = 1U;             /* [AI] A2: 复位 J1/J2 位置环故障 */
+                    break;
+                default:                                  /* 7（SOFT_RESET）：臂板不做 */
                     break;
                 }
             }
@@ -196,6 +201,10 @@ void can_tx_task_step(uint32_t now_ms)
         can_clear_req = 0U;
         arm_estop_clear();
     }
+    if (can_clear_fault_req != 0U) {
+        can_clear_fault_req = 0U;
+        joint_fault_clear();   /* [AI] A2: 复检条件已消失才由 25 kHz ISR 真正清位 */
+    }
 
     /* bus-off 计数（ABOM 自动恢复，ESR.BOFF 上升沿累计） */
     {
@@ -228,7 +237,9 @@ void can_tx_task_step(uint32_t now_ms)
         (void)can_tx(SERVO_STATE_B_ID, d);
     }
     if (ph % 100U == 55U) {                      /* 10 Hz：ARM_DIAG（55: 避开臂帧相位） */
-        put_le16(&d[0], 0U);                     /* FAULT：臂板无故障码源 */
+        /* [AI] A2: FAULT_u16 仍发 0（冻结协议：不新增位语义）；
+           J1/J2 位置环故障通过 **STATE_u16.bit2 fault_active**（YAML 已定义）上报。 */
+        put_le16(&d[0], 0U);
         put_le16(&d[2], arm_state_bitmap(busoff_prev, now_ms));
         d[4] = arm_mode();
         d[5] = arm_servo_errcnt();

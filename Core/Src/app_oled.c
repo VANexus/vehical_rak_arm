@@ -1,13 +1,15 @@
 /**
  * [AI]  @file  app_oled.c — SSD1306 OLED 调试显示（软 SPI PD11..PD14）
  *
- * A1（机械臂板）：显示内容改为六轴实际角 / 模式机 / 指令流 / 复位原因 / build_tag，
+ * A2（机械臂板）：六轴实际角（J1/J2 来自编码器，J3..J6 来自舵机 CCR）/ 模式机 /
+ * 指令流 / 复位原因 / build_tag / J1,J2 电机轴状态。
  * 驱动与时序沿用迁移前底盘板验证过的实现（软 SPI + DWT 延时）。
  * 本文件不依赖 HAL tick（DWT 延时），不碰 MX 生成文件。
  */
 #include "app_oled.h"
 #include "app_arm.h"
 #include "app_build.h"
+#include "app_joint.h"
 #include "main.h"
 #include "stm32f4xx.h"
 #include <stdio.h>
@@ -194,6 +196,19 @@ static void render(void)
 
     /* y=40: Home 安全位自检提示（上电后未收到任何指令前应停在 Home） */
     display_text(0, 40, arm_estop_latched() ? "ARMD" : "READY");
+
+    /* y=50: [AI] A2 J1/J2 电机轴状态：B=刹车 H=在位 M=跟踪 F=故障；
+       Z=是否已归零 F=是否有故障，BTN=PE0 按住中（长按 1.5s 置零） */
+    {
+        static const char stch[4] = { 'B', 'H', 'M', 'F' };
+        unsigned s1 = joint_state(0U); unsigned s2 = joint_state(1U);
+        (void)snprintf(row, sizeof(row), "J1%c J2%c Z%c F%c %s",
+                       stch[s1 > 3U ? 0U : s1], stch[s2 > 3U ? 0U : s2],
+                       joint_zeroed() ? '1' : '0',
+                       joint_fault() ? '1' : '0',
+                       joint_btn_pressed() ? "BTN" : "   ");
+        display_text(0, 50, row);
+    }
 
     oled_flush();
 }

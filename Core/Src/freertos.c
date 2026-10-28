@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include "app_arm.h"
 #include "app_can.h"
+#include "app_joint.h"
 #include "app_oled.h"
 /* USER CODE END Includes */
 
@@ -134,10 +135,15 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   (void)argument;   /* [AI]  未使用（其余四个任务同款写法），-Wextra 要求显式 */
-  /* [AI] A1: 舵机标定结论沿用底盘板实测（ch0=PC6=J6/ch2=PC8=J4/ch5=PB15=J1，
-     ch1=PC7=J5 与 ch3=PC9=J3 为 0~270° 位置型、ch4=PB14=J2 为 0~135° 机械限位，
-     MG995/996R 500µs=0°、2500µs=270°）。⚠️ 转述自迁移前底盘板实测记录，
-     本板装臂后需按实物复核一次。 */
+
+  /* [AI] A2: 启动 J1/J2 的 25 kHz 位置环（TIM6 中断宿主 = stm32f4xx_it.c 的
+     TIM6_DAC_IRQHandler）。与底盘板同思路：boot 与实时中断解耦，调度器起来后再开。 */
+  joint_start_isr();
+
+  /* [AI] A2: J3..J6 舵机标定沿用迁移前实测记录（ch1=PC7=J5、ch2=PC8=J4、
+     ch3=PC9=J3、ch0=PC6=J6；MG995/996R 500µs=0°、2500µs=270°）。
+     ⚠️ 转述自迁移前底盘板实测记录，本板装臂后需按实物复核一次。
+     J1(ch5)/J2(ch4) 已改电机，不再适用本条。 */
   for(;;)
   {
     osDelay(1000);

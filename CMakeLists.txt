@@ -48,6 +48,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/app_can.c
     Core/Src/app_servo.c
     Core/Src/app_arm.c
+    Core/Src/app_joint.c
     Core/Src/app_build.c
     Core/Src/app_oled.c
 )

@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_joint.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -258,8 +259,9 @@ void USART3_IRQHandler(void)
 void TIM6_DAC_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM6_DAC_IRQn 0 */
-  /* [AI] A1: 机械臂板没有 25 kHz 闭环（舵机是纯硬件 PWM），原 car_control_isr()
-     调用已移除。TIM6 在臂板仅作占位中断，不做任何事。 */
+  /* [AI] A2: J1/J2 增量编码器电机 25 kHz 位置环（自检/清 UIF，优先于 HAL 路由）；
+     返回后 HAL_TIM_IRQHandler 查 UIF 已清→空操作。J3..J6 舵机不需要中断。 */
+  joint_isr();
   /* USER CODE END TIM6_DAC_IRQn 0 */
   HAL_TIM_IRQHandler(&htim6);
   /* USER CODE BEGIN TIM6_DAC_IRQn 1 */

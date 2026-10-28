@@ -13,6 +13,7 @@
  */
 #include "app_arm.h"
 
+#include "app_joint.h"
 #include "app_servo.h"
 #include "main.h"
 #include "stm32f4xx.h"
@@ -25,8 +26,9 @@ static volatile uint8_t  s_cmd_seen;
 static uint32_t          s_boot_ms;
 static uint8_t           s_reset_cause = '-';
 
-/* 轴 → 舵机通道（装臂实测接线）：J1=ch5 J2=ch4 J3=ch3 J4=ch2 J5=ch1 J6=ch0 */
-static const unsigned k_axis_to_ch[ARM_AXIS_COUNT] = { 5U, 4U, 3U, 2U, 1U, 0U };
+/* [AI] A2: J3..J6 → 舵机通道（J1=ch5/J2=ch4 两路舵机随电机改造**已停用**）。
+   装臂实测接线：J3=ch3 J4=ch2 J5=ch1 J6=ch0（PC9/PC8/PC7/PC6，TIM8_CH4..CH1）。 */
+static const unsigned k_servo_ch[ARM_AXIS_COUNT - ARM_JOINT_AXIS_COUNT] = { 3U, 2U, 1U, 0U };
 
 void arm_init(void)
 {
@@ -47,6 +49,10 @@ void arm_init(void)
 
     /* 舵机输出 Home 安全位（app_servo.c 单点定义 500/2166/2500/500/500/500 µs） */
     servo_init();
+
+    /* [AI] A2: J1/J2 增量编码器电机闭环（app_joint）。
+       上电只刹车、不驱动；零点未定义（未归零前 J1/J2 不接受指令）。 */
+    joint_init();
 }
 
 void arm_command_deg10(const uint16_t deg10[7], uint8_t valid_mask)
@@ -62,6 +68,15 @@ void arm_command_deg10(const uint16_t deg10[7], uint8_t valid_mask)
         return;
     }
     for (unsigned axis = 0; axis < ARM_AXIS_COUNT; ++axis) {
+        if (axis < ARM_JOINT_AXIS_COUNT) {
+            /* [AI] A2: J1/J2 = 增量编码器电机位置闭环（app_joint）。
+               仅在**远程门开**时接受目标（否则保持当前姿态）；
+               未归零 / 急停 / 故障时 app_joint 内部自行刹车，本层无需再判。 */
+            if ((valid_mask & (1U << axis)) != 0U && s_remote != 0U) {
+                joint_set_target_deg10(axis, deg10[axis]);
+            }
+            continue;
+        }
         unsigned us;
         if ((valid_mask & (1U << axis)) != 0U) {
             /* 0.1° → 脉宽：us = 500 + deg10×2000/2700 = 500 + deg10×20/27 */
@@ -73,7 +88,7 @@ void arm_command_deg10(const uint16_t deg10[7], uint8_t valid_mask)
         } else {
             us = ARM_PULSE_MID_US;   /* 无效轴回中位（与迁移前底盘板行为一致） */
         }
-        servo_set_pulse(k_axis_to_ch[axis], us);
+        servo_set_pulse(k_servo_ch[axis - ARM_JOINT_AXIS_COUNT], us);
     }
 }
 
@@ -81,12 +96,16 @@ void arm_estop_latch(void)
 {
     s_estop = 1U;
     s_remote = 0U;
-    /* 不动 PWM：舵机保持当前位置（急停语义 = 冻结，不是归零） */
+    /* 舵机（J3..J6）不动 PWM：保持当前位置（急停语义 = 冻结，不是归零）。
+       [AI] A2: J1/J2 是电机，必须**主动断电**——置门后下一个 25 kHz 节拍
+       （≤40 µs）立即短路制动，本函数可在 CAN ISR 上下文调用。 */
+    joint_set_estop(1U);
 }
 
 void arm_estop_clear(void)
 {
     s_estop = 0U;
+    joint_set_estop(0U);   /* [AI] A2: 清门后 J1/J2 恢复位置环（若已归零） */
 }
 
 uint8_t arm_estop_latched(void) { return s_estop; }
@@ -116,8 +135,10 @@ uint16_t arm_state_bitmap(uint8_t busoff_now, uint32_t now_ms)
     if (s_remote != 0U)   s |= 1U << 1;   /* remote_running */
     if (arm_cmd_stale(now_ms) != 0U) s |= 1U << 3;   /* cmd_stale */
     if (busoff_now != 0U) s |= 1U << 5;   /* can_recovering */
-    /* bit2 fault：臂板当前无故障码源（无电流采样/编码器闭环），恒 0
+    /* [AI] A2: bit2 fault = J1/J2 位置环故障（跟随误差 >30° 或软限位越界）。
+       未归零**不算** fault（是"未就绪"），OLED 单独显示 NOTZRO。
        bit4 bat_uv：本板未接电池 ADC 采样，恒 0 */
+    if (joint_fault() != 0U) s |= 1U << 2;
     return s;
 }
 
@@ -133,11 +154,14 @@ uint8_t arm_servo_errcnt(void) { return s_errcnt; }
 
 uint16_t arm_axis_deg10(unsigned axis)
 {
-    unsigned us;
     if (axis >= ARM_AXIS_COUNT) {
         return 0U;
     }
-    us = servo_get_pulse(k_axis_to_ch[axis]);
+    /* [AI] A2: J1/J2 回读来自编码器（app_joint），J3..J6 仍来自舵机 CCR */
+    if (axis < ARM_JOINT_AXIS_COUNT) {
+        return joint_actual_deg10(axis);
+    }
+    unsigned us = servo_get_pulse(k_servo_ch[axis - ARM_JOINT_AXIS_COUNT]);
     if (us < ARM_PULSE_MIN_US) {
         us = ARM_PULSE_MIN_US;
     }

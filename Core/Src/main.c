@@ -113,7 +113,9 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
-  arm_init();      /* [AI]  A1: 复位原因 + 舵机 Home 安全位(6 路 50Hz;外设初始化由 MX_TIM8/12 完成) */
+  arm_init();      /* [AI]  A2: 复位原因 + J3..J6 舵机 Home 安全位 + J1/J2 电机刹车
+                      (外设初始化由 MX_TIM8/12 舵机、MX_TIM1/9/10/11 电机 PWM、
+                       MX_TIM2/3/4/5 编码器完成；25kHz TIM6 由 joint_start_isr 在调度器后开) */
   can_init();      /* [AI]  R20: CAN 过滤器/启动/通知 + 接收队列 */
   /* [AI] A1: 臂板无串口路径——控制与遥测全走 CAN（USB v2 是底盘板备用链路） */
   /* USER CODE END 2 */
