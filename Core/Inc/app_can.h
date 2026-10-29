@@ -21,4 +21,12 @@ void can_tx_task_step(uint32_t now_ms);  /* 1 kHz；Task_CAN_Tx 调用 */
 
 uint8_t crc8(const uint8_t *p, uint8_t n, uint8_t init);   /* 协议 CRC8（与底盘板同名同语义） */
 
+/* [AI] A3 CAN 诊断取值（供 app_can_diag.c 打印；不参与任何控制决策） */
+uint32_t app_can_rx_total(void);      /* 收到的帧总数（任何 ID） */
+uint32_t app_can_rx_of(uint32_t id);   /* 某个标准 ID 的收帧计数 */
+uint32_t app_can_tx_ok(void);         /* 入队成功的发帧次数 */
+uint32_t app_can_tx_fail(void);       /* 邮箱满/发不出去（= 没人 ACK 的征兆） */
+uint32_t app_can_busoff_cnt(void);    /* bus-off 发生次数 */
+uint32_t app_can_esr(void);           /* bxCAN ESR 原值（EPVF/BOFF/LEC/TEC/REC） */
+
 #endif /* APP_CAN_H */

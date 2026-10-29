@@ -46,6 +46,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/app_can.c
+    Core/Src/app_can_diag.c
     Core/Src/app_servo.c
     Core/Src/app_arm.c
     Core/Src/app_joint.c

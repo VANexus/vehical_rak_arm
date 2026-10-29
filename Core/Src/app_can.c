@@ -40,6 +40,27 @@ static volatile uint8_t  can_clear_fault_req;  /* [AI] A2: SAFETY CLEAR_FAULT（
 static volatile uint8_t  busoff_cnt;
 static CAN_FilterTypeDef can_flt_saved;
 
+/* [AI] A3 CAN 诊断计数（只读统计，不参与控制决策）。
+   收帧在 ISR 里累加 —— 计数是单字读写，ISR/任务并发下不会撕裂到不可读。 */
+#define CAN_DIAG_ID_SLOTS 12U
+static volatile uint32_t s_rx_total;
+static volatile uint32_t s_rx_id[CAN_DIAG_ID_SLOTS];
+static volatile uint32_t s_rx_cnt[CAN_DIAG_ID_SLOTS];
+static volatile uint32_t s_rx_other;
+static volatile uint32_t s_tx_ok;
+static volatile uint32_t s_tx_fail;
+
+/* ISR 侧调用：按标准 ID 计数。ID 0 不在 v4 帧集里，可当空槽标记。 */
+static void diag_count_rx(uint32_t id)
+{
+    s_rx_total++;
+    for (unsigned i = 0U; i < CAN_DIAG_ID_SLOTS; i++) {
+        if (s_rx_id[i] == id) { s_rx_cnt[i]++; return; }
+        if (s_rx_id[i] == 0U) { s_rx_id[i] = id; s_rx_cnt[i] = 1U; return; }
+    }
+    s_rx_other++;
+}
+
 uint8_t crc8(const uint8_t *p, uint8_t n, uint8_t init)
 {
     uint8_t crc = init;
@@ -100,6 +121,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &hdr, d) != HAL_OK) break;
         f.id = hdr.StdId;
         for (unsigned k = 0; k < 8U; ++k) f.data[k] = d[k];
+        diag_count_rx(f.id);          /* [AI] A3: 板间互通诊断计数 */
 
         /* 0x010 SAFETY_CMD：e2e 快速路径，CRC 在 ISR 内校验。
            急停锁存立即生效（≤40µs 语义：舵机冻结不需要 ISR 参与，
@@ -171,8 +193,36 @@ static int can_tx(uint32_t std_id, const uint8_t *d)
     hdr.IDE = CAN_ID_STD;
     hdr.RTR = CAN_RTR_DATA;
     hdr.DLC = 8U;
-    return (HAL_CAN_AddTxMessage(&hcan1, &hdr, d, NULL) == HAL_OK) ? 1 : 0;
+    /* [AI] A3: AddTxMessage 失败 = 三个邮箱全忙。正常情况下一帧发出去后
+       邮箱会被硬件回收；总线没人 ACK 时帧一直重发、邮箱长期占用 → 这里失败
+       计数会持续涨，这就是"对端不在总线上"的直接征兆。 */
+    if (HAL_CAN_AddTxMessage(&hcan1, &hdr, d, NULL) == HAL_OK) {
+        s_tx_ok++;
+        return 1;
+    }
+    s_tx_fail++;
+    return 0;
 }
+
+/* ---- [AI] A3 CAN 诊断取值 ---- */
+uint32_t app_can_rx_total(void) { return s_rx_total; }
+
+uint32_t app_can_rx_of(uint32_t id)
+{
+    for (unsigned i = 0U; i < CAN_DIAG_ID_SLOTS; i++) {
+        if (s_rx_id[i] == id) return s_rx_cnt[i];
+    }
+    return 0U;
+}
+
+uint32_t app_can_tx_ok(void)   { return s_tx_ok; }
+uint32_t app_can_tx_fail(void) { return s_tx_fail; }
+uint32_t app_can_busoff_cnt(void) { return busoff_cnt; }
+
+/* [AI] A3: bxCAN 的 ESR 是"错误状态寄存器"—— EPVF(bit1)/BOFF(bit2)/LEC(bits6:4)
+   直接可读；TEC/REC 是硬件错误计数器。F4 HAL 没有暴露 TEC/REC 的 API，
+   这里直读 ESR 原值（只读，不改任何寄存器），由人按位段判断。 */
+uint32_t app_can_esr(void) { return (uint32_t)hcan1.Instance->ESR; }
 
 /* Task_CAN_Tx：1 kHz 底拍。相位错开避免同拍挤爆 3 个发送邮箱：
    轮位类底盘帧本板不发；臂帧 20+5 ms（A/B 两帧分相位）、DIAG 55 ms、NODE_INFO 999 ms。 */

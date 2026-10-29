@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include "app_arm.h"
 #include "app_can.h"
+#include "app_can_diag.h"
 #include "app_joint.h"
 #include "app_oled.h"
 /* USER CODE END Includes */
@@ -64,6 +65,7 @@ const osThreadAttr_t defaultTask_attributes = {
 static void task_can_rx(void *argument);
 static void task_can_tx(void *argument);
 static void task_status(void *argument);
+static void task_can_diag(void *argument);   /* [AI] A3: CAN 互通诊断打印 */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -107,13 +109,17 @@ void MX_FREERTOS_Init(void) {
     .name = "cantx", .stack_size = 4096, .priority = (osPriority_t) osPriorityNormal };
   static const osThreadAttr_t stat_attr = {
     .name = "stat", .stack_size = 4096, .priority = (osPriority_t) osPriorityBelowNormal };
+  /* [AI] A3: 诊断线程（1 Hz 打一行 CAN 统计）。栈给 2048 B —— snprintf 需要。 */
+  static const osThreadAttr_t candg_attr = {
+    .name = "candg", .stack_size = 2048, .priority = (osPriority_t) osPriorityLow };
   /* [AI]  创建失败 = 堆不足。静默跑下去板子看起来"活着"但 CAN 全哑——
      这是最难查的失败模式，所以显式兜底（A1: 已无 ctrl 线程）。 */
   osThreadId_t h_canrx = osThreadNew(task_can_rx, NULL, &canrx_attr);  /* [AI]  CAN 接收解析 */
   osThreadId_t h_cantx = osThreadNew(task_can_tx, NULL, &cantx_attr);  /* [AI]  1kHz 发送 */
   osThreadId_t h_stat  = osThreadNew(task_status, NULL, &stat_attr);   /* [AI]  10Hz 喂狗 */
+  osThreadId_t h_candg = osThreadNew(task_can_diag, NULL, &candg_attr);/* [AI] A3: CAN 诊断打印 */
   if (defaultTaskHandle == NULL || h_canrx == NULL ||
-      h_cantx == NULL || h_stat == NULL) {
+      h_cantx == NULL || h_stat == NULL || h_candg == NULL) {
     Error_Handler();
   }
   /* USER CODE END RTOS_THREADS */
@@ -183,6 +189,12 @@ static void task_status(void *argument)
     oled_show_step(HAL_GetTick());                  /* [AI]  R13: OLED 调试显示(惰性初始化,内部 5Hz 重绘) */
     vTaskDelayUntil(&last, pdMS_TO_TICKS(100));     /* 10 Hz */
   }
+}
+
+/* [AI] A3: CAN 互通诊断线程 —— 只打印，不做任何控制决策 */
+static void task_can_diag(void *argument)
+{
+  app_can_diag_task(argument);
 }
 
 /* [AI]  ---- FreeRTOS 失败钩子（configCHECK_FOR_STACK_OVERFLOW=2 / malloc hook）----
