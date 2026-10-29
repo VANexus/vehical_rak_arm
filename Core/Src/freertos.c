@@ -30,6 +30,7 @@
 #include "app_bench.h"
 #include "app_buzz.h"
 #include "app_can.h"
+#include "app_canopen.h"
 #include "app_can_diag.h"
 #include "app_imu.h"
 #include "app_joint.h"
@@ -72,6 +73,7 @@ static void task_status(void *argument);
 static void task_can_diag(void *argument);   /* [AI] A3: CAN 互通诊断打印 */
 static void task_bench(void *argument);      /* [AI] A6: 台架串口控制台 */
 static void task_imu(void *argument);        /* [AI] A7: 板载 IMU 200 Hz 采样 */
+static void task_arm_ctrl(void *argument);   /* v5: CANopen 命令/反馈桥接 50 Hz */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -124,6 +126,9 @@ void MX_FREERTOS_Init(void) {
   /* [AI] A7: IMU 采样线程（200 Hz，软 I2C 块读）。优先级 Normal：不能抢 1 kHz 收发。 */
   static const osThreadAttr_t imu_attr = {
     .name = "imu", .stack_size = 2048, .priority = (osPriority_t) osPriorityNormal };
+  /* v5: CANopen 命令/反馈桥接（50 Hz）。优先级 Normal：不能抢 1 kHz 收发。 */
+  static const osThreadAttr_t armctl_attr = {
+    .name = "armctl", .stack_size = 2048, .priority = (osPriority_t) osPriorityNormal };
   /* [AI]  创建失败 = 堆不足。静默跑下去板子看起来"活着"但 CAN 全哑——
      这是最难查的失败模式，所以显式兜底（A1: 已无 ctrl 线程）。 */
   osThreadId_t h_canrx = osThreadNew(task_can_rx, NULL, &canrx_attr);  /* [AI]  CAN 接收解析 */
@@ -132,9 +137,10 @@ void MX_FREERTOS_Init(void) {
   osThreadId_t h_candg = osThreadNew(task_can_diag, NULL, &candg_attr);/* [AI] A3: CAN 诊断打印 */
   osThreadId_t h_bench = osThreadNew(task_bench, NULL, &bench_attr);   /* [AI] A6: 台架串口控制台 */
   osThreadId_t h_imu   = osThreadNew(task_imu, NULL, &imu_attr);       /* [AI] A7: IMU 采样 */
+  osThreadId_t h_armctl = osThreadNew(task_arm_ctrl, NULL, &armctl_attr); /* v5: CANopen 桥接 */
   if (defaultTaskHandle == NULL || h_canrx == NULL ||
       h_cantx == NULL || h_stat == NULL || h_candg == NULL || h_bench == NULL ||
-      h_imu == NULL) {
+      h_imu == NULL || h_armctl == NULL) {
     Error_Handler();
   }
   /* USER CODE END RTOS_THREADS */
@@ -232,6 +238,16 @@ static void task_bench(void *argument)
 static void task_imu(void *argument)
 {
   imu_arm_task(argument);
+}
+
+static void task_arm_ctrl(void *argument)
+{
+  (void)argument;
+  TickType_t last = xTaskGetTickCount();
+  for (;;) {
+    app_canopen_step(HAL_GetTick());
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(20));   /* 50 Hz */
+  }
 }
 
 /* [AI]  ---- FreeRTOS 失败钩子（configCHECK_FOR_STACK_OVERFLOW=2 / malloc hook）----

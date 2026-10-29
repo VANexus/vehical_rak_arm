@@ -1,54 +1,81 @@
-/*
- * app_oled.c — [AI] A13 SSD1306 OLED（**I2C**，软 I2C，PD11..PD14 开漏）
+/**
+ * [AI]  @file  app_oled.c — SSD1306 OLED 调试显示（软 SPI PD11..PD14）
  *
- * 【为什么重写】用户实测：三块屏都是 **4 脚 I2C（VCC/GND/SCL/SDA）**，
- *   而旧驱动是 4 线 SPI（DC/RES/CLK/DIN）。两者对不上，所以屏从来没亮过
- *   （历史上"OLED 显示正确"是 SWD 读回帧缓冲 RAM 得出的，不是肉眼确认）。
- *
- * 【引脚】板子中央 OLED 口 = PD11..PD14 四根。I2C 只用其中 2 根（SCL/SDA），
- *   但排线顺序未知 → **运行时自动试探**：{(11,12),(12,11),(13,14),(14,13)}
- *   × 地址 {0x3C,0x3D}，谁 ACK 就用谁。
- *   两脚已由 CubeMX 配成 GPIO_MODE_OUTPUT_OD（开漏，I2C 必需）。
- *
- * 【时序】DWT 忙等半周期 ~3 µs（≈160 kHz，够 SSD1306 用；不占定时器）。
- *
- * 【对外】
- *   oled_show_step(now)  10 Hz 调用，内部 5 Hz 重绘
- *   oled_set_page(p)     CAN 0x033 UI_CMD：0=自动 1=关节 2=IMU 3=诊断 4=自检反白
- *   oled_set_contrast(c)
+ * A2（机械臂板）：六轴实际角（J1/J2 来自编码器，J3..J6 来自舵机 CCR）/ 模式机 /
+ * 指令流 / 复位原因 / build_tag / J1,J2 电机轴状态。
+ * 驱动与时序沿用迁移前底盘板验证过的实现（软 SPI + DWT 延时）。
+ * 本文件不依赖 HAL tick（DWT 延时），不碰 MX 生成文件。
  */
 #include "app_oled.h"
-
 #include "app_arm.h"
 #include "app_build.h"
-#include "app_dbg.h"
-#include "app_imu.h"
 #include "app_joint.h"
 #include "main.h"
-
+#include "stm32f4xx.h"
 #include <stdio.h>
 
-#define OLED_REFRESH_MS 200U
-#define OLED_I2C_DLY    48U      /* 忙等圈数，约 3 µs */
+#define OLED_REFRESH_MS 200U          /* 5Hz 重绘（R4 同款） */
 
-/* ---- 帧缓冲（页式 8×128）---- */
-static uint8_t frame[8][128];
+/* ---- DWT 毫秒延时（init 路径禁 HAL tick 依赖——R3 教训,与 app_imu 同套路） ---- */
+static void oled_delay_ms(uint32_t ms)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    uint32_t start = DWT->CYCCNT;
+    uint32_t span = ms * (SystemCoreClock / 1000U);
+    while ((uint32_t)(DWT->CYCCNT - start) < span) { __NOP(); }
+}
 
-/* ---- 探测结果 ---- */
-static uint8_t s_scl, s_sda;     /* 引脚号（11..14） */
-static uint8_t s_addr;           /* 7 位地址 */
-static uint8_t s_ready;
-static uint8_t s_page;           /* 0=自动 */
-static uint8_t s_contrast = 0xCF;
-static uint8_t s_invert;
+/* ---- 驱动（R4 验证过的软 SPI 实现） ---- */
+static void pin_set(unsigned pin, int high)
+{
+    GPIOD->BSRR = high ? (1UL << pin) : (1UL << (pin + 16U));
+}
 
-/* 5x7 字库（仅 0x20..0x5A，与旧驱动一致，只支持大写） */
-static const uint8_t font[64][5] = {
-    [' ' - ' '] = {0x00, 0x00, 0x00, 0x00, 0x00},
+static void oled_byte(uint8_t value, int data)
+{
+    pin_set(11, data);
+    for (unsigned bit = 0; bit < 8; ++bit) {
+        pin_set(14, 0);
+        pin_set(13, (value & 0x80U) != 0);
+        pin_set(14, 1);
+        value <<= 1;
+    }
+}
+
+static void oled_cmd(uint8_t value)  { oled_byte(value, 0); }
+static void oled_data(uint8_t value) { oled_byte(value, 1); }
+
+static void oled_init(void)
+{
+    /* [AI] R20 CubeMX 迁移：PD11-14 已由 MX_GPIO_Init 配置为推挽输出
+       （gpio.c, OUTPUT_PP），删寄存器版 GPIO 配置块 */
+    pin_set(14, 1);
+    pin_set(12, 0);
+    oled_delay_ms(100);
+    pin_set(12, 1);
+    oled_delay_ms(10);
+    oled_cmd(0xAE);
+    oled_cmd(0xD5); oled_cmd(0x50);
+    oled_cmd(0xA8); oled_cmd(0x3F);
+    oled_cmd(0xD3); oled_cmd(0x00);
+    oled_cmd(0x40);
+    oled_cmd(0x8D); oled_cmd(0x14);
+    oled_cmd(0x20); oled_cmd(0x02);
+    oled_cmd(0xA0); oled_cmd(0xC0);
+    oled_cmd(0xDA); oled_cmd(0x12);
+    oled_cmd(0x81); oled_cmd(0xEF);
+    oled_cmd(0xD9); oled_cmd(0xF1);
+    oled_cmd(0xDB); oled_cmd(0x30);
+    oled_cmd(0xA4); oled_cmd(0xA6);
+    oled_cmd(0xAF);
+}
+
+/* 5x7 字库（R4 原版 + [AI] 补 H/I/K/Q/X/Z，其余未列字形=空白） */
+static const uint8_t font[59][5] = {
+    ['+' - ' '] = {0x08, 0x08, 0x3E, 0x08, 0x08},
     ['-' - ' '] = {0x08, 0x08, 0x08, 0x08, 0x08},
     ['.' - ' '] = {0x00, 0x60, 0x60, 0x00, 0x00},
-    [':' - ' '] = {0x00, 0x36, 0x36, 0x00, 0x00},
-    ['/' - ' '] = {0x20, 0x10, 0x08, 0x04, 0x02},
     ['0' - ' '] = {0x3E, 0x51, 0x49, 0x45, 0x3E},
     ['1' - ' '] = {0x00, 0x42, 0x7F, 0x40, 0x00},
     ['2' - ' '] = {0x42, 0x61, 0x51, 0x49, 0x46},
@@ -59,6 +86,7 @@ static const uint8_t font[64][5] = {
     ['7' - ' '] = {0x01, 0x71, 0x09, 0x05, 0x03},
     ['8' - ' '] = {0x36, 0x49, 0x49, 0x49, 0x36},
     ['9' - ' '] = {0x06, 0x49, 0x49, 0x29, 0x1E},
+    [':' - ' '] = {0x00, 0x36, 0x36, 0x00, 0x00},
     ['A' - ' '] = {0x7E, 0x11, 0x11, 0x11, 0x7E},
     ['B' - ' '] = {0x7F, 0x49, 0x49, 0x49, 0x36},
     ['C' - ' '] = {0x3E, 0x41, 0x41, 0x41, 0x22},
@@ -68,8 +96,7 @@ static const uint8_t font[64][5] = {
     ['G' - ' '] = {0x3E, 0x41, 0x49, 0x49, 0x7A},
     ['H' - ' '] = {0x7F, 0x08, 0x08, 0x08, 0x7F},
     ['I' - ' '] = {0x00, 0x41, 0x7F, 0x41, 0x00},
-    ['J' - ' '] = {0x20, 0x40, 0x41, 0x3F, 0x01},
-    ['K' - ' '] = {0x7F, 0x08, 0x14, 0x22, 0x41},
+    ['K' - ' '] = {0x7F, 0x10, 0x28, 0x44, 0x00},
     ['L' - ' '] = {0x7F, 0x40, 0x40, 0x40, 0x40},
     ['M' - ' '] = {0x7F, 0x02, 0x0C, 0x02, 0x7F},
     ['N' - ' '] = {0x7F, 0x04, 0x08, 0x10, 0x7F},
@@ -81,232 +108,120 @@ static const uint8_t font[64][5] = {
     ['T' - ' '] = {0x01, 0x01, 0x7F, 0x01, 0x01},
     ['U' - ' '] = {0x3F, 0x40, 0x40, 0x40, 0x3F},
     ['V' - ' '] = {0x1F, 0x20, 0x40, 0x20, 0x1F},
-    ['W' - ' '] = {0x7F, 0x20, 0x18, 0x20, 0x7F},
+    ['W' - ' '] = {0x3F, 0x40, 0x38, 0x40, 0x3F},
     ['X' - ' '] = {0x63, 0x14, 0x08, 0x14, 0x63},
-    ['Y' - ' '] = {0x03, 0x04, 0x78, 0x04, 0x03},
+    ['Y' - ' '] = {0x07, 0x08, 0x70, 0x08, 0x07},
     ['Z' - ' '] = {0x61, 0x51, 0x49, 0x45, 0x43},
 };
 
-/* ======================= 软 I2C（开漏） ======================= */
-
-static void od_hi(uint8_t pin) { GPIOD->BSRR = (1UL << pin); }          /* 释放 → 上拉拉高 */
-static void od_lo(uint8_t pin) { GPIOD->BSRR = (1UL << (pin + 16U)); }  /* 拉低 */
-static int  od_rd(uint8_t pin) { return (GPIOD->IDR & (1UL << pin)) ? 1 : 0; }
-
-static void i2c_dly(void)
-{
-    volatile uint32_t n = OLED_I2C_DLY;
-    while (n--) { __NOP(); }
-}
-
-static void i2c_start(void)
-{
-    od_hi(s_sda); od_hi(s_scl); i2c_dly();
-    od_lo(s_sda); i2c_dly();
-    od_lo(s_scl); i2c_dly();
-}
-
-static void i2c_stop(void)
-{
-    od_lo(s_sda); i2c_dly();
-    od_hi(s_scl); i2c_dly();
-    od_hi(s_sda); i2c_dly();
-}
-
-static int i2c_wr(uint8_t b)   /* 0 = ACK */
-{
-    for (unsigned i = 0; i < 8U; ++i) {
-        if (b & 0x80U) od_hi(s_sda); else od_lo(s_sda);
-        b = (uint8_t)(b << 1);
-        i2c_dly(); od_hi(s_scl); i2c_dly(); od_lo(s_scl);
-    }
-    od_hi(s_sda); i2c_dly();
-    od_hi(s_scl); i2c_dly();
-    int ack = od_rd(s_sda);
-    od_lo(s_scl); i2c_dly();
-    return ack;
-}
-
-/* 写一帧：控制字节 + n 字节数据 */
-static int oled_write(uint8_t ctrl, const uint8_t *buf, unsigned n)
-{
-    i2c_start();
-    if (i2c_wr((uint8_t)(s_addr << 1))) { i2c_stop(); return 1; }
-    (void)i2c_wr(ctrl);
-    for (unsigned i = 0; i < n; ++i) (void)i2c_wr(buf[i]);
-    i2c_stop();
-    return 0;
-}
-
-static void oled_cmd1(uint8_t c) { (void)oled_write(0x00U, &c, 1U); }
-
-/* ======================= 探测 / 初始化 ======================= */
-
-static int probe(uint8_t scl, uint8_t sda, uint8_t addr)
-{
-    s_scl = scl; s_sda = sda; s_addr = addr;
-    od_hi(scl); od_hi(sda); i2c_dly();
-    i2c_start();
-    int nack = i2c_wr((uint8_t)(addr << 1));
-    i2c_stop();
-    return (nack == 0) ? 0 : 1;
-}
-
-static void oled_init(void)
-{
-    BOOT_MARK(8);
-
-    /* 自动试探 SCL/SDA 组合与地址 */
-    static const uint8_t pairs[4][2] = { {11, 12}, {13, 14}, {12, 11}, {14, 13} };
-    static const uint8_t addrs[2] = { 0x3C, 0x3D };
-    int found = 0;
-    for (unsigned p = 0; p < 4U && found == 0; ++p) {
-        for (unsigned a = 0; a < 2U && found == 0; ++a) {
-            if (probe(pairs[p][0], pairs[p][1], addrs[a]) == 0) found = 1;
-        }
-    }
-    if (found == 0) { s_ready = 0U; return; }   /* 没找到：任务继续跑，不阻塞 */
-
-    static const uint8_t init_seq[] = {
-        0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
-        0x8D, 0x14, 0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12,
-        0x81, 0xCF, 0xD9, 0xF1, 0xDB, 0x40, 0xA4, 0xA6, 0xAF
-    };
-    for (unsigned i = 0; i < sizeof(init_seq); ++i) oled_cmd1(init_seq[i]);
-    BOOT_MARK(9);
-    s_ready = 1U;
-}
-
-/* ======================= 绘制 ======================= */
+static uint8_t frame[8][128];
+static uint8_t oled_ready;
 
 static void pixel(unsigned x, unsigned y)
 {
-    if (x < 128U && y < 64U) frame[y / 8U][x] |= (uint8_t)(1U << (y % 8U));
+    if (x < 128 && y < 64) {
+        unsigned page = (y / 16U) * 2U + ((y % 16U) / 8U);
+        frame[page][x] |= (uint8_t)(1U << (y % 8U));
+    }
 }
 
 static void glyph(unsigned x, unsigned y, char c)
 {
     if (c < ' ' || c > 'Z') c = ' ';
-    const uint8_t *g = font[(unsigned)(c - ' ')];
-    for (unsigned col = 0; col < 5U; ++col) {
-        for (unsigned row = 0; row < 7U; ++row) {
-            if (g[col] & (1U << row)) pixel(x + col, y + row);
+    for (unsigned col = 0; col < 5; ++col) {
+        uint8_t bits = font[(unsigned)(c - ' ')][col];
+        for (unsigned row = 0; row < 7; ++row) {
+            if (bits & (1U << row)) pixel(x + col, y + row);
         }
     }
 }
 
-static void text(unsigned x, unsigned y, const char *s)
+static void display_text(unsigned x, unsigned y, const char *s)
 {
-    for (unsigned i = 0; s[i] != '\0' && (x + i * 6U) < 128U; ++i) glyph(x + i * 6U, y, s[i]);
+    for (unsigned i = 0; s[i] && x + i * 6U < 128; ++i)
+        glyph(x + i * 6U, y, s[i]);
 }
 
-static void clear_frame(void)
+static void oled_flush(void)
 {
-    for (unsigned p = 0; p < 8U; ++p)
-        for (unsigned x = 0; x < 128U; ++x) frame[p][x] = 0U;
-}
-
-static void flush(void)
-{
-    BOOT_MARK(10);
-    for (unsigned page = 0; page < 8U; ++page) {
-        uint8_t cmds[3];
-        cmds[0] = (uint8_t)(0xB0U + page);
-        cmds[1] = 0x00U;          /* 列低 4 位 */
-        cmds[2] = 0x10U;          /* 列高 4 位 */
-        (void)oled_write(0x00U, cmds, 3U);
-        (void)oled_write(0x40U, frame[page], 128U);
+    for (unsigned page = 0; page < 8; ++page) {
+        oled_cmd((uint8_t)(0xB0U + page));
+        oled_cmd(0x00); oled_cmd(0x10);
+        for (unsigned x = 0; x < 128; ++x) oled_data(frame[page][x]);
     }
 }
 
-/* 全屏自检图案（CAN 0x033 PAGE=4）*/
-static void selftest_pattern(void)
-{
-    for (unsigned p = 0; p < 8U; ++p) {
-        for (unsigned x = 0; x < 128U; ++x) {
-            frame[p][x] = (uint8_t)(((x / 8U) % 2U) ? 0xAAU : 0x55U);
-        }
-    }
-}
-
+/* [AI] ---- 布局（R13 调试重点,全部大写:字库仅大写） ----
+   y=0 : B12.3V E1 P- R13        电池/使能/复位原因/版本
+   y=10: IMU MPU S1 Y+123.4      芯片/状态/积分航向
+   y=20: RT+12.3 C+120 S256      角速度/稳定修正/降额比例
+   y=30: W+012 -012 +012 -012    四轮实测转速(counts/ms)
+   y=40: V+123 +000 +000 SL-     车体速度(轮速正算)/打滑标志
+   y=54: 状态文本 ... U999s      模式/遥控/自检/急停 + 运行秒数 */
 static void render(void)
 {
-    char row[24];
-    clear_frame();
+    char row[32];
 
-    if (s_page == 4U) { selftest_pattern(); flush(); return; }
+    for (unsigned p = 0; p < 8; ++p)
+        for (unsigned x = 0; x < 128; ++x) frame[p][x] = 0;
 
-    /* 首行：标签 + 运行秒数 */
-    uint32_t up = arm_uptime_s(HAL_GetTick());
-    if (up > 9999U) up = 9999U;
-    (void)snprintf(row, sizeof(row), "P%c U%lus", (char)arm_reset_cause(), (unsigned long)up);
-    text(0, 0, row);
-    text(96, 0, build_tag);
+    /* y=0 : 构建标识 + 运行秒数（AGENTS.md §5 规则 4：冷启动先认标签） */
+    uint32_t up_s = arm_uptime_s(HAL_GetTick());
+    if (up_s > 999U) up_s = 999U;
+    (void)snprintf(row, sizeof(row), "P%c U%lus",
+                   (char)arm_reset_cause(), (unsigned long)up_s);
+    display_text(0, 0, row);
+    display_text(102, 0, build_tag);
 
-    if (s_page == 0U || s_page == 1U) {
-        (void)snprintf(row, sizeof(row), "J1%3u J2%3u J3%3u",
-                       (unsigned)(arm_axis_deg10(0U) / 10U),
-                       (unsigned)(arm_axis_deg10(1U) / 10U),
-                       (unsigned)(arm_axis_deg10(2U) / 10U));
-        text(0, 12, row);
-        (void)snprintf(row, sizeof(row), "J4%3u J5%3u J6%3u",
-                       (unsigned)(arm_axis_deg10(3U) / 10U),
-                       (unsigned)(arm_axis_deg10(4U) / 10U),
-                       (unsigned)(arm_axis_deg10(5U) / 10U));
-        text(0, 24, row);
+    /* y=10: 六轴实际角（0.1° 取整到度，避免 float printf） */
+    (void)snprintf(row, sizeof(row), "J1%3u J2%3u J3%3u",
+                   (unsigned)(arm_axis_deg10(0U) / 10U),
+                   (unsigned)(arm_axis_deg10(1U) / 10U),
+                   (unsigned)(arm_axis_deg10(2U) / 10U));
+    display_text(0, 10, row);
+    (void)snprintf(row, sizeof(row), "J4%3u J5%3u J6%3u",
+                   (unsigned)(arm_axis_deg10(3U) / 10U),
+                   (unsigned)(arm_axis_deg10(4U) / 10U),
+                   (unsigned)(arm_axis_deg10(5U) / 10U));
+    display_text(0, 20, row);
+
+    /* y=30: 模式机 + 指令流状态 + 异常计数 */
+    static const char *const mode_name[4] = { "IDLE", "REMOTE", "ESTOP", "FAULT" };
+    uint8_t mode = arm_mode();
+    (void)snprintf(row, sizeof(row), "%s ST%c ER%u",
+                   mode_name[mode > 3U ? 0U : mode],
+                   arm_cmd_stale(HAL_GetTick()) ? '!' : '-',
+                   (unsigned)arm_servo_errcnt());
+    display_text(0, 30, row);
+
+    /* y=40: Home 安全位自检提示（上电后未收到任何指令前应停在 Home） */
+    display_text(0, 40, arm_estop_latched() ? "ARMD" : "READY");
+
+    /* y=50: [AI] A2 J1/J2 电机轴状态：B=刹车 H=在位 M=跟踪 F=故障；
+       Z=是否已归零 F=是否有故障，BTN=PE0 按住中（长按 1.5s 置零） */
+    {
+        static const char stch[4] = { 'B', 'H', 'M', 'F' };
+        unsigned s1 = joint_state(0U); unsigned s2 = joint_state(1U);
+        (void)snprintf(row, sizeof(row), "J1%c J2%c Z%c F%c %s",
+                       stch[s1 > 3U ? 0U : s1], stch[s2 > 3U ? 0U : s2],
+                       joint_zeroed() ? '1' : '0',
+                       joint_fault() ? '1' : '0',
+                       joint_btn_pressed() ? "BTN" : "   ");
+        display_text(0, 50, row);
     }
 
-    if (s_page == 0U || s_page == 2U) {
-        (void)snprintf(row, sizeof(row), "IMU C%u %uH %uMG",
-                       (unsigned)imu_arm_chip(),
-                       (unsigned)(imu_arm_rate_x10() / 10U),
-                       (unsigned)imu_arm_amag_mg());
-        text(0, 36, row);
-        (void)snprintf(row, sizeof(row), "IMPACT %lu",
-                       (unsigned long)joint_impact_cnt());
-        text(0, 48, row);
-        return;
-    }
-
-    if (s_page == 3U) {
-        static const char *const mode_name[4] = { "IDLE", "REMOTE", "ESTOP", "FAULT" };
-        uint8_t mode = arm_mode();
-        (void)snprintf(row, sizeof(row), "%s E%u", mode_name[mode > 3U ? 0U : mode],
-                       (unsigned)(arm_estop_latched() ? 1U : 0U));
-        text(0, 12, row);
-        (void)snprintf(row, sizeof(row), "Z%c F%c ST%u",
-                       joint_zeroed() ? '1' : '0', joint_fault() ? '1' : '0',
-                       (unsigned)joint_state(0U));
-        text(0, 24, row);
-    }
-}
-
-/* ======================= 对外 ======================= */
-
-void oled_set_page(uint8_t page) { s_page = (page > 4U) ? 0U : page; }
-
-void oled_set_contrast(uint8_t c)
-{
-    s_contrast = c;
-    if (s_ready != 0U) { oled_cmd1(0x81U); oled_cmd1(c); }
-}
-
-void oled_set_invert(uint8_t on)
-{
-    s_invert = on;
-    if (s_ready != 0U) oled_cmd1(on ? 0xA7U : 0xA6U);
+    oled_flush();
 }
 
 void oled_show_step(uint32_t now_ms)
 {
     static uint32_t last;
-    if (s_ready == 0U) {
+    if (oled_ready == 0U) {
         oled_init();
-        if (s_ready == 0U) return;   /* 没探到屏：静默降级，不阻塞 */
+        oled_ready = 1U;
         last = now_ms;
     }
     if ((uint32_t)(now_ms - last) < OLED_REFRESH_MS) return;
     last = now_ms;
     render();
-    flush();
 }
