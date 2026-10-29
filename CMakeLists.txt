@@ -51,7 +51,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/app_arm.c
     Core/Src/app_joint.c
     Core/Src/app_build.c
-    Core/Src/app_oled.c
 )
 
 # Add include paths
@@ -87,7 +86,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # [AI]  额外告警。-Wall 已在 cmake/gcc-arm-none-eabi.cmake 里，但那份是
 # CubeMX 生成的、重生成会覆盖，所以补充项写在这里。只作用于本 target 的
 # 源文件（app_*.c 与 MX_Application_Src），不波及 HAL/FreeRTOS 库。
-#   -Wdouble-promotion 对本仓尤其重要：app_car/app_imu/app_oled 大量 float
+#   -Wdouble-promotion 对本仓尤其重要：app_joint/app_imu 大量 float
 #   运算，漏写一个 'f' 后缀就会静默插入一次双精度提升（软浮点，慢且吃栈）。
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
     -Wextra

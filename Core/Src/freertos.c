@@ -30,7 +30,6 @@
 #include "app_can.h"
 #include "app_can_diag.h"
 #include "app_joint.h"
-#include "app_oled.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -186,7 +185,7 @@ static void task_status(void *argument)
   TickType_t last = xTaskGetTickCount();
   for (;;) {
     HAL_IWDG_Refresh(&hiwdg);                       /* [AI]  A1: 10Hz 喂狗(原 car_feed_watchdog 同体) */
-    oled_show_step(HAL_GetTick());                  /* [AI]  R13: OLED 调试显示(惰性初始化,内部 5Hz 重绘) */
+    /* [AI] A5: OLED 已从本板移除（占 PD11-14 四根 GPIO，且调试信息改由 USART 输出） */
     vTaskDelayUntil(&last, pdMS_TO_TICKS(100));     /* 10 Hz */
   }
 }

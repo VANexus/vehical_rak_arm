@@ -1,6 +1,11 @@
 /*
  * app_build.c — 固件构建标识（单点定义）
  *
+ * A5（2026-10-29）：**移除 OLED**（app_oled.c/h 删除，PD11-14 四根 GPIO 释放，
+ *   调试信息全部改由 USART1/USART3 输出）；J1/J2 接线映射按实物确认：
+ *   **TJ1 = 电机 A（J1/腰）、TJ2 = 电机 B（J2/大臂）**，代码 {A,B} 无需改。
+ *   同时实测确认：机械臂板改用**板载 CAN 收发器**（拆掉外挂 TJA1051）后，
+ *   三节点 CAN 全通 —— 收帧正常、txfail=0、ESR=0。
  * A4（2026-10-29）：诊断打印同时走 USART1 与 USART3（C30D 有两个 CH9102F
  *   USB 口，台架插的是哪一个不确定，两路都打）。
  * A3（2026-10-29）：新增 CAN 板间互通诊断（app_can_diag.c）—— 1 Hz 经 USART1
@@ -14,4 +19,4 @@
  */
 #include "app_build.h"
 
-const char build_tag[] = "A4";
+const char build_tag[] = "A5";
