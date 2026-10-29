@@ -58,14 +58,52 @@ void joint_set_zero(void);
 uint8_t joint_zeroed(void);
 
 /* 故障（位图：bit0=J1, bit1=J2）。故障轴刹车，直到置零或 joint_fault_clear()。
-   触发条件：跟随误差 >30° 或超出软限位 + 容差（防飞车）。 */
+   触发条件：跟随误差 >30°、位置环模式堵转、或超出软限位 + 容差（防飞车）。 */
 uint8_t joint_fault(void);
-void joint_fault_clear(void);   /* 请求；ISR 复检条件消失后才真正清位 */
+void joint_fault_clear(void);   /* 请求；ISR 复检条件消失后才真正清位（清位时目标重同步到当前位置） */
+
+/* ---- A6 台架点动：慢速恒占空比 + 碰撞即停 ----------------------------------
+ * 为什么需要它：J2 有明确的机械限位（一定会撞），J1 是连续旋转；首次上板要摸清
+ *   行程与方向，**不能**用位置环去"顶着限位把占空比拉到 85%"。点动走开环恒占空比，
+ *   由 1 kHz ISR 执行；碰撞/堵转判定成立 → 当拍刹车。
+ * 要点：
+ *   - 点动**不需要先归零**（这正是它的用途），但故障锁存或急停时拒绝启动；
+ *   - duration_ms 到点自动刹（默认 1.2 s），串口/上位机掉线不会满转；
+ *   - duty_q 单位 0.01%（2500 = 25%），上限 JOINT_JOG_DUTY_Q_MAX；
+ *   - 点动期间 `joint_set_target_deg10()` 仍被记录但不执行，结束时会重同步目标到
+ *     当前位置 —— 之后必须重新发目标，不会"松手弹回"。
+ */
+void joint_jog(uint8_t axis, int8_t dir, int32_t duty_q, uint16_t duration_ms);
+void joint_jog_stop(void);
+uint8_t joint_jog_active(void);              /* 位图：bit0=J1, bit1=J2 */
+uint8_t joint_jog_axis_active(uint8_t axis);
+void joint_jog_set_duty(int32_t duty_q);     /* 设定下一次点动占空比（0.01%） */
+int32_t joint_jog_get_duty(void);
+
+/* 碰撞/堵转记录（位图）：判到"占空比已给足却不动"即置位。
+   点动模式下只刹车 + 置位（探边界本来就会撞，不锁故障）；
+   位置环模式下同时锁 FAULT。下一次点动启动时自动清该轴的位。 */
+uint8_t joint_collide(void);
+
+/* ---- A7：加速度计碰撞确认（由 app_imu 调用）----
+ * 编码器只能看出“没在动”，看不出“是不是撞了”；板载加速度计能。
+ * 语义：置一个请求位，由 25 kHz ISR 在下一拍落地 —— **不在任务上下文碰
+ * ISR 拥有的 duty/位置状态**。落地动作：取消正在跑的点动并记碰撞，
+ * 同时把 impact 计数 +1（供控制台/遥测）。
+ */
+void joint_note_impact(void);
+uint32_t joint_impact_cnt(void);
+
+/* 观测量（上层只读）：当前施加的占空比（0.01%）/ 有符号 0.1°（J1 连续旋转可为负） */
+int32_t joint_duty_q(unsigned axis);
+int32_t joint_actual_deg10_signed(unsigned axis);
 
 /* 目标角（0.1°，相对零点）；超出软限位会被钳位。未收到目标时保持上一次目标。 */
 void joint_set_target_deg10(unsigned axis, uint16_t deg10);
 
-/* 反馈（0.1°，相对零点；由编码器累计计数换算，分辨率 0.005859°/计数） */
+/* 反馈（0.1°，相对零点；由编码器累计计数换算，分辨率 0.005859°/计数）。
+   协议字段是无符号 0..2700，超范围会被饱和；要看真实有符号角度用
+   joint_actual_deg10_signed()（J1 连续旋转会越过 0/360）。 */
 uint16_t joint_actual_deg10(unsigned axis);
 int32_t  joint_pos_counts(unsigned axis);   /* 原始累计计数（相对零点） */
 int32_t  joint_err_counts(unsigned axis);   /* 目标 - 实际（counts） */

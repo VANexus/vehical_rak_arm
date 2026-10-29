@@ -47,9 +47,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/app_can.c
     Core/Src/app_can_diag.c
+    Core/Src/app_bench.c
     Core/Src/app_servo.c
     Core/Src/app_arm.c
     Core/Src/app_joint.c
+    Core/Src/app_imu.c
+    Core/Src/app_buzz.c
+    Core/Src/app_dbg.c
+    Core/Src/app_oled.c
     Core/Src/app_build.c
 )
 

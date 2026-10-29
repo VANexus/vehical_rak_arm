@@ -37,18 +37,22 @@
 
 ---
 
-## 1. 当前状态：A2（J1/J2 改造为编码器电机闭环）
+## 1. 当前状态：A7（三颗 IMU 全部启用 + J1/J2 防撞 + 台架控制台）
 
 | 项 | 状态 |
 | --- | --- |
 | CubeMX 生成 | ✅ FW_F4 V1.28.3，TargetToolchain=CMake（`.ioc` = `vehical_rak_arm.ioc`） |
-| Debug / Release 构建 | ✅ 双预设零警告 |
-| 应用代码 | ✅ A2：**J1/J2 增量编码器电机位置闭环**（`app_joint`，25 kHz 采样 + 1 kHz 定点位置 PI + 软件置零 + 急停刹车）+ J3..J6 舵机 PWM + CAN v4 臂帧收发 + OLED + IWDG |
-| 上板运行 | ⏳ 待上板实测（真断电冷启动 + 核对 `build_tag=A2`）。**J1/J2 电机轴必须先走 §6 流程** |
-| CAN 物理联调 | ⏳ 与底盘板 / Jetson 三节点联调待做（2026-10-29 起） |
-| 协议 | ✅ **零改动**：`0x110/0x111` 与 `0x210/0x211` 的 ID / 字节布局一字未动（Jetson 侧零改动） |
+| Debug / Release 构建 | ✅ 双预设零警告（A6）|
+| 应用代码 | ✅ A6：**J1/J2 增量编码器电机位置闭环**（`app_joint`，25 kHz 采样 + 1 kHz 定点位置 PI + 软件置零 + 急停刹车 + **碰撞/堵转即停** + **开环慢速点动**）+ **台架串口控制台**（`app_bench`，USART1）+ J3..J6 舵机 PWM + CAN v4 臂帧收发 + IWDG |
+| 上板运行 | ✅ A7 已烧录（2026-10-29，SWD 校验通过）；⏳ 行为待台架核对：串口横幅应为 `[A7] bench console ready` |
+| 显示 | ❌ 不用 OLED（2026-10-29 用户决定）。A5 起本板无显示驱动，PD11-14 仅作为低电平输出闲置 |
+| 板载 IMU | ✅ A7/A8：PB10/PB11 软 I2C 双芯片探测（MPU6050/ICM20948），200 Hz 14 字节块读；出 `impact` / `GZ` / `AMAG`；上传 0x222 @100 Hz |
+| IMU 语义（重要） | 三颗 IMU **全部在车体上**（本板也固定在底盘，不在机械臂上）→ 本板这颗是**同一刚体的第二颗**：角速度与安装位置无关，`0x222.GZ` 与底盘板 `0x032.DYAW` 可互校；加速度只给模值/冲击，不做姿态 |
+| CAN 物理联调 | ✅ 三节点互通已实测（两块 C30D + Jetson；rx 正常、txfail=0、ESR=0，2026-10-29） |
+| 协议 | ✅ **零改动**：`0x110/0x111` 与 `0x210/0x211` 的 ID / 字节布局一字未动 （Jetson 侧零改动） |
 
-`build_tag` 单点定义在 [`Core/Src/app_build.c`](Core/Src/app_build.c)，OLED 右上角显示。
+`build_tag` 单点定义在 [`Core/Src/app_build.c`](Core/Src/app_build.c)；**A5 起本板无 OLED**，
+版本身份由串口横幅（`[A6] bench console ready ...`）与 CAN `0x031 ARM_NODE_INFO` 的 `BUILD_u16` 判定。
 
 ---
 
@@ -95,15 +99,18 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `Core/Src/app_joint.c` | **L1/L2 实时层（A2 新增）**：J1/J2 AT8236 双输入 + 正交编码器 + 25 kHz 采样 + 1 kHz 定点位置 PI + 软件置零 + 防飞车闸门 + PE0 长按；配置（接线/换算/增益/限位/极性）**单点定义在文件顶部** |
+| `Core/Src/app_joint.c` | **L1/L2 实时层（A2 新增，A6 扩展）**：J1/J2 AT8236 双输入 + 正交编码器 + 25 kHz 采样 + 1 kHz 定点位置 PI + 软件置零 + 防飞车闸门 + PE0 长按； **A6 新增**：碰撞/堵转判定（占空比≥15% 且 200 ms 无位移）+ 开环慢速点动 `joint_jog()`； 配置（接线/换算/增益/限位/极性）**单点定义在文件顶部** |
+| `Core/Src/app_bench.c` | **A6 新增，L5/调试**：USART1(USB-CH9102F) 单字符控制台（1/2/3/4 点动 J1±/J2±、0 停、+/- 调占空比、p 打印、m 监视、k 置零、c 清故障）； 同时是本板**唯一串口写入口** `bench_write()`（互斥 + USART1/USART3 双路）|
 | `Core/Src/app_arm.c` | L3 语义层：角度→执行机构换算（J1/J2→counts，J3..J6→脉宽）、轴↔通道映射、急停锁存、指令断流判定、状态位图/模式机 |
 | `Core/Src/app_servo.c` | L1 驱动：6 路舵机 PWM 写 CCR（TIM8/TIM12）+ 读回脉宽；`servo_init` 输出 Home 安全位 |
-| `Core/Src/app_can.c` | L5 通信：v4 臂帧编解码（`0x110/0x111` 下行，`0x210/0x211/0x221/0x031` 上行）；`0x010 SAFETY` e2e 校验在 ISR 内；`cmd=6 CLEAR_FAULT` 复位 J1/J2 位置环故障 |
-| `Core/Src/app_oled.c` | L1 调试显示：复位原因/运行秒数/build_tag、6 轴角（J1/J2 = 编码器回读）、模式机/指令流/异常计数、急停提示、J1/J2 电机轴状态 |
+| `Core/Src/app_can.c` | L5 通信：v4 臂帧编解码（`0x110/0x111` 下行，`0x210/0x211/0x221/0x031` 上行）；`0x010 SAFETY` e2e 校验在 ISR 内；`cmd=6 CLEAR_FAULT` 复 位 J1/J2 位置环故障 |
+| `Core/Src/app_can_diag.c` | A3：1 Hz CAN 互通诊断打印（收/发/txfail/bo/ESR + 对端帧计数），走 `bench_write()` |
+| ~~`Core/Src/app_oled.c`~~ | **A5 已删除**（占 PD11-14，本板不再有 OLED；调试信息全走 USART） |
 | `Core/Src/app_build.c` | 构建标识 `build_tag`（单点定义） |
 
-任务（`Core/Src/freertos.c`）：`canrx`（阻塞队列）、`cantx`（1 kHz 底拍）、`stat`（10 Hz 喂狗 + OLED）、
-`defaultTask`（启动 25 kHz 关节环后空转）。**舵机没有控制回路**（纯硬件 PWM）；
+任务（`Core/Src/freertos.c`）：`canrx`（阻塞队列）、`cantx`（1 kHz 底拍）、`stat`（10 Hz 喂狗）、
+`candg`（1 Hz CAN 诊断）、`bench`（A6：台架控制台）、`defaultTask`（启动 25 kHz 关节环 + 控制台初始化后空转）。
+**舵机没有控制回路**（纯硬件 PWM）；
 **J1/J2 的 25 kHz 关节环跑在 TIM6 中断里**（`stm32f4xx_it.c` → `joint_isr`），
 由 `defaultTask` 在调度器起来后 `joint_start_isr()` 启动（与底盘板同思路）。
 
@@ -120,8 +127,22 @@ cmake --preset Release && cmake --build --preset Release
 STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm.hex -v -rst
 ```
 
-烧录后必须**真断电冷启动**（电池关 → 拔 ST-LINK → 等 OLED 全黑 → 再上电），
-并以屏上 `build_tag` 判别实际运行版本。**每次有效改动升一档标签**（`A1` → `A2` …）。
+烧录后必须**真断电冷启动**（电池关 → 拔 ST-LINK → 等 3 s → 再上电），
+并以串口横幅 `[A6] bench console ready ...` 与 CAN `0x031` 的 `BUILD_u16` 判别实际运行版本。
+**每次有效改动升一档标签**（`A2` → `A3` … → `A6`）。
+
+### 4.1 烧录：常规走 SWD；USB 口是串口 + 一键下载电路
+
+- 板子上那两个 Type-C **都是 CH9102F USB-UART 桥**（→ USART1 / USART3），不是 MCU 原生 USB。
+- `STM32Programmer_CLI` 的 `-c port=SWD` 走 **ST-LINK**（GND / SWDIO=PA13 / SWCLK=PA14 / nRST）；
+  `port=USB1` 指的是 ST-LINK 自身的 USB 枚举名，不是板子的 Type-C。
+- USB 串口能不能下载固件，取决于板上 U13 「串口1一键下载电路」是否把 CH9102F 的
+  DTR/RTS 接到 BOOT0/NRST（**转述自 2026-10-14 调试记录，待复核原理图**）。即使有，
+  CubeProgrammer 的 UART 模式**不会自己拉 DTR/RTS 时序**（不会自动进 ROM bootloader），
+  要用能控制这两条线的工具（FlyMcu / 厂商下载器 / `stm32flash -i`）—— **本仓未实测**。
+  另：这两个串口被下载电路“按住复位”时会断流（DTR/RTS 误置的副作用）。
+- 结论：需要可靠、可重复、能校验的烧录 → **用 ST-LINK SWD**（本文档与 `tools/flash_c30d.sh` 均按此写）。
+- 开机时先不上电驱动、台架轮子/臂架空、BOOT0 保持低电平。
 
 ---
 
@@ -146,16 +167,47 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 **准备**：臂固定/悬空支撑（J2 会因自重下落，掉电无抱闸）；电池电压正常；
 手放在总电源开关上；先 `candump can0` 只看不发。
 
+### 6.1 A6 起：先用串口控制台点动（**推荐从这里开始**）
+
+A5 起本板无 OLED，调试全靠串口。A6 又加了一个**本地控制台**，所以前几步可以完全
+不碰 Jetson、不归零、不发 ARM_CMD：
+
+```bash
+# 机械臂板 USB(Type-C) 插电脑，两个口任选其一（USART1/USART3 都打）
+python3 -m serial.tools.miniterm /dev/ttyACM0 921600   # 或用 minicom/picocom
+# 上电后应看到：[A6] bench console ready (USART1/3 @921600). ? for help
+```
+
+| 按键 | 作用 |
+| --- | --- |
+| `1` / `2` | J1 正转 / 反转（每次 **1.2 s** 自动刹，开环 25% 占空比） |
+| `3` / `4` | J2 正转 / 反转（同上） |
+| `0` | 立即停（取消点动） |
+| `+` / `-` | 点动占空比 ±5%（5%..60%）—— 起转不动就往上加 |
+| `p` | 打一行状态（counts / 有符号 0.1° / 状态 / F 故障 / C 碰撞 / duty） |
+| `m` | 5 Hz 连续监视（手转轴看编码器有没有数就靠它） |
+| `k` | 软件置零（等同长按 PE0） |
+| `c` | 清故障 |
+
+碰撞判定 = “占空比≥15% 且连续 200 ms 位移 < 30 counts（≈1.8°/s）” → **当拍刹车**，
+并打一行 `[bench] Jx end: moved=... hit=1`。点动模式下**不锁故障**（探边界本来就会撞），
+下一次点动自动清碰撞记录；**位置环模式**下同样的判据会锁 `FAULT`。
+
+> ⚠️ 两种 `hit=1` 要分清：`moved≈0` 且电机一声不响 = **占空比不够**（静摩擦），按 `+` 加；
+> `moved` 先增后停、有硬顶手感 = **真撞到限位**，把这一下的 counts 记下来就是行程。
+
+### 6.2 闭环验证（归零之后再做）
+
 | 步 | 做什么 | 判据 / 记录 |
 | --- | --- | --- |
-| 1 | 真断电冷启动，看 OLED | `build_tag=A2`；第 6 行 `J1B J2B Z0 F0`（B=刹车，Z0=未归零） |
+| 1 | 真断电冷启动，看串口横幅 | `[A6] bench console ready ...`（= `build_tag`）；`p` 打出的行里 `st=0 F=0 C=0`（刹车、无故障） |
 | 2 | 不发任何指令，`candump can0,031:7FF` + `can0,221:7FF` | 1 Hz `0x031`（PROTO=4）+ 10 Hz `0x221` 正常；`0x210/0x211` 50 Hz 自发 |
-| 3 | **线序核对**：转动 J1 输出轴（手转即可），看 OLED 的 J1 角度是否变化 | 变了 = 该轴编码器口选对了；两轴都要变。不动 = `kJointEncIdx` 选错，改代码重烧 |
+| 3 | **线序核对**：手转 J1/J2 输出轴（不使能也能转），按 `m` 看 counts 是否变 | 变了 = 该轴编码器口选对了；两轴都要变。不动 = `kJointEncIdx` 选错，改代码重烧 |
 | 4 | **极性确认**：长按 PE0 ≥1.5 s 置零（`Z1`），然后 `candump` 观察或用最小目标 | ⚠️ 见下 |
-| 5 | 归零后给 J1 一个**很小的**目标（如 1.0°） | 关节应**朝角度增大方向**微动且误差收敛到 0（OLED `M`→`H`）。若**反向跑** → 翻 `kJointSign` 对应项，重烧重来 |
+| 5 | 归零后给 J1 一个**很小的**目标（如 1.0°） | 关节应**朝角度增大方向**微动且误差收敛到 0（串口 `st=2`→`st=1`）。若**反向跑** → 翻 `kJointSign` 对应项，重烧重来 |
 | 6 | J2 同法 | 同上（J2 注意自重：目标向上/向下各试一次） |
 | 7 | 逐步放大目标（5°→20°→90°），记录跟随误差、是否有 FAULT | 反复 FAULT 且误差大 = 增益/目标斜坡要调（`JOINT_KP/KI`、`JOINT_TGT_SLEW`） |
-| 8 | 满量程与软限位标定 | 记录实际可达角度 → 填 `JOINT_ANGLE_MAX_DEG10` |
+| 8 | 满量程与软限位标定 | 用 §6.1 点动撞到两端，记录 counts → 换算成相对零点的 ±0.1°，填 `kJointLimitOn` / `kJointLimitMin/Max`（默认关闭；J1 连续旋转永远不填） |
 | 9 | **ISR 占用率实测**（AGENTS 要求，仓库无数据） | SWD 读 `dbg_joint_isr_max_cycles`；预算 40 µs = 6720 周期，**≤35% = 2352 周期** |
 | 10 | 记录 `.bin` 的 SHA-256、供电电压、结论 | 写进提交说明（AGENTS §5 规则 5） |
 
@@ -179,8 +231,11 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
   只可去 ADC1 / USART3 等真正不用的。重生成后按 [`docs/CUBEMX-SOP.md`](docs/CUBEMX-SOP.md) 走三步必查。
   （阻塞点：离线重生成需 CubeMX 仓库路径指向 FW_F4 V1.28.3，当前 `~/STM32Cube/Repository` 多了一层。）
 - **上板实测**：按 §6 做 J1/J2 电机轴首版；J3..J6 核对 Home 安全位、方向与满量程、急停冻结语义。
+- **J2 机械行程实测（A6 待做）**：台架当前约 4-5 点方向 ↔ 7-8 点方向（面向电机看），
+  用 §6.1 点动分别撞到两端，记下两端 counts/角度 → 填 `kJointLimitOn` / `kJointLimitMin/Max`。
 - **J1/J2 待实测参数**（全在 `app_joint.c` 顶部，见 `docs/ARM-ENCODER-JOINTS-DESIGN.md` §9）：
-  电机口/编码器口映射、出力极性 `kJointSign`、减速比（若有）、角度范围、位置环增益。
+  电机口/编码器口映射、出力极性 `kJointSign`、减速比（若有）、角度范围、位置环增益、
+  **起转占空比**（静摩擦）—— 点动控制台按 `+` 就能测。
 - **ISR 占用率实测**：`dbg_joint_isr_max_cycles`（40 µs = 6720 周期，预算 ≤2352 周期）。
 - **夹爪**：走第几路、驱动器选型、有无位置反馈（挂起项）。
 - **双板 1 kHz 互锁**：v3 的 `XFER_*` 仍未启用（当前两板各自与 Jetson 对话，无板间互锁）。

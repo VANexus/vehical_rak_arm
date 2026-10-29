@@ -43,10 +43,35 @@ static const int8_t  kJointSign[JOINT_COUNT]    = { 1, 1 };
 /* ---- 换算常数（一个物理量只允许一个常数） ---- */
 #define JOINT_CNT_PER_DEG10_X100  1707U   /* counts per 0.1° × 100 = 61440/3600×100 */
 
-/* ---- 软限位（相对零点，0.1°）。[AI] 待实测：J1/J2 允许角度范围未确认。 ---- */
-#define JOINT_ANGLE_MIN_DEG10     0U
-#define JOINT_ANGLE_MAX_DEG10     2700U
+/* ---- 软限位（相对零点，有符号 0.1°）----
+   [AI] A6：改成**每轴可关**。理由（2026-10-29 台架）：
+     - J1（腰）= 连续旋转，没有机械限位 —— 老的固定 0..2700 会让它在转过 270° 时锁 FAULT；
+     - J2（大臂）= 有明确机械限位（一定会撞），但**实际行程还没实测**
+       （台架当前约 4-5 点方向 ↔ 7-8 点方向，具体角度随装配变化）。
+   默认两轴都**关闭**软限位，靠下面的碰撞/堵转判定做保护；实测出行程后把
+   kJointLimitOn[axis] 置 1 并填 min/max（相对零点），重新编译即生效。 */
+#define JOINT_PROTO_MAX_DEG10     2700U   /* 协议字段上限（无符号 270.0°） */
 #define JOINT_TRAVEL_MARGIN_DEG10 200U    /* 越界容差 20°：只拦飞车，不误报正常超调 */
+
+static const uint8_t kJointLimitOn[JOINT_COUNT]       = { 0U, 0U };
+static const int32_t kJointLimitMinDeg10[JOINT_COUNT] = { 0, -1350 };   /* J2 占位 -135° */
+static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 占位 +135° */
+
+/* ---- 碰撞/堵转判定（本板无电流采样，只能看"给了占空比却不动"）----
+   [AI] A6：100 ms 窗口累加位移，连续 2 窗（共 200 ms）不够 30 counts
+   （≈300 counts/s ≈1.8°/s）就判"顶住" → 立即刹车。
+   ⚠️ 这条判据的速度下限就是 ~1.8°/s：比这更慢的点动会被判成"不动"（设计取舍）。 */
+#define JOINT_STALL_DUTY_Q   1500L   /* ≥15% 占空比才判：低于此不足以顶住机械限位 */
+#define JOINT_STALL_WIN_MS    100U   /* 判速窗口 */
+#define JOINT_STALL_CPM100     30L   /* 每 100 ms 位移下限（counts） */
+#define JOINT_STALL_WINS        2U   /* 连续窗口数 */
+
+/* ---- 台架点动（A6）---- */
+#define JOINT_JOG_DUTY_DEF   2500L   /* 默认 25%：慢速，撞上也是轻碰 */
+#define JOINT_JOG_DUTY_MIN    500L   /* 5% */
+#define JOINT_JOG_DUTY_MAX   6000L   /* 60%：再高就不算"慢速探测"了 */
+#define JOINT_JOG_MS_DEF     1200U   /* 单次点动 1.2 s，到点自动刹 */
+#define JOINT_JOG_MS_MAX     3000U   /* 连续按键可续到 3 s（仍不是"按住不停"） */
 
 /* ---- 位置环（1 kHz 定点；[AI] 未上板整定的初值，首版上板必须重标） ---- */
 #define JOINT_KP_NUM    10L      /* 单位误差 → 0.01% 占空比：100 counts(0.59°) → 10% */
@@ -89,11 +114,24 @@ static volatile uint8_t s_zeroed;
 static volatile uint8_t s_fault[JOINT_COUNT];
 static volatile uint8_t s_zero_req;
 static volatile uint8_t s_clear_req;
+static volatile uint8_t s_impact_req;      /* [AI] A7: 加速度计碰撞确认请求（ISR 落地） */
+static volatile uint32_t s_impact_cnt;
 static volatile uint8_t s_btn_pressed;
 static uint32_t s_btn_low, s_btn_hold;
 static uint8_t  s_btn_fired;
 static uint8_t  s_isr_started;
 static uint32_t s_win_cnt;
+
+/* [AI] A6：台架点动 + 碰撞/堵转状态（点动字段由任务侧写、ISR 读，见 joint_jog 注释） */
+static volatile int32_t  s_jog_duty_q[JOINT_COUNT];
+static volatile int8_t   s_jog_dir[JOINT_COUNT];
+static volatile uint16_t s_jog_ms[JOINT_COUNT];      /* 剩余点动时间，0 = 未点动 */
+static volatile uint8_t  s_collide[JOINT_COUNT];
+static volatile int32_t  s_jog_duty_sel = JOINT_JOG_DUTY_DEF;
+static int32_t  s_pos_prev_1k[JOINT_COUNT];          /* 1 kHz 位移统计 */
+static int32_t  s_move_acc[JOINT_COUNT];
+static uint16_t s_win_ms[JOINT_COUNT];
+static uint8_t  s_still_wins[JOINT_COUNT];
 
 /* [AI] 25 kHz ISR 占用率量具（AGENTS.md：预算 ≤35% = 2352 周期） */
 volatile uint32_t dbg_joint_isr_last_cycles;
@@ -168,17 +206,99 @@ static void joint_encoder_start(uint8_t idx)
 
 /* ======================= 换算 ======================= */
 
-static int32_t counts_of_deg10(uint32_t deg10)
+static int32_t counts_of_deg10(int32_t deg10)
 {
-    return (int32_t)((deg10 * JOINT_CNT_PER_DEG10_X100) / 100U);
+    return (deg10 * (int32_t)JOINT_CNT_PER_DEG10_X100) / 100L;
 }
 
-static uint16_t deg10_of_counts(int32_t counts)
+/* 有符号 0.1°（J1 连续旋转可为负 / 超 2700） */
+static int32_t deg10_of_counts(int32_t counts)
 {
-    int32_t full = (int32_t)((JOINT_ANGLE_MAX_DEG10 * JOINT_CNT_PER_DEG10_X100) / 100U);
-    if (counts <= 0L) return 0U;
-    if (counts >= full) return (uint16_t)JOINT_ANGLE_MAX_DEG10;   /* 防 int32 乘法溢出 */
-    return (uint16_t)((counts * 100L) / (int32_t)JOINT_CNT_PER_DEG10_X100);
+    return (counts * 100L) / (int32_t)JOINT_CNT_PER_DEG10_X100;
+}
+
+/* 相对零点 → 协议无符号字段（0..2700 饱和） */
+static uint16_t deg10_proto(int32_t counts_rel)
+{
+    int32_t d = deg10_of_counts(counts_rel);
+    if (d < 0L) return 0U;
+    if (d > (int32_t)JOINT_PROTO_MAX_DEG10) return (uint16_t)JOINT_PROTO_MAX_DEG10;
+    return (uint16_t)d;
+}
+
+/* 软限位越界（含容差）；该轴未启用软限位时恒 0 */
+static uint8_t joint_out_of_limit(unsigned a)
+{
+    if (kJointLimitOn[a] == 0U) return 0U;
+    int32_t rel = s_pos_counts[a] - s_zero_counts[a];
+    int32_t lo = counts_of_deg10(kJointLimitMinDeg10[a] - (int32_t)JOINT_TRAVEL_MARGIN_DEG10);
+    int32_t hi = counts_of_deg10(kJointLimitMaxDeg10[a] + (int32_t)JOINT_TRAVEL_MARGIN_DEG10);
+    return (uint8_t)((rel < lo || rel > hi) ? 1U : 0U);
+}
+
+/* ======================= A6：碰撞/堵转 + 点动（ISR 侧） ======================= */
+
+/* 1 kHz 位移统计：100 ms 窗累加 |Δcounts|，判定"动没动" */
+static void joint_track_motion(unsigned a)
+{
+    int32_t d = s_pos_counts[a] - s_pos_prev_1k[a];
+    s_pos_prev_1k[a] = s_pos_counts[a];
+    if (d < 0L) d = -d;
+    if (s_move_acc[a] < 1000000L) s_move_acc[a] += d;
+    if (++s_win_ms[a] < JOINT_STALL_WIN_MS) return;
+
+    uint8_t still = (s_move_acc[a] < JOINT_STALL_CPM100) ? 1U : 0U;
+    s_move_acc[a] = 0L;
+    s_win_ms[a] = 0U;
+    if (still != 0U) {
+        if (s_still_wins[a] < 255U) s_still_wins[a]++;
+    } else {
+        s_still_wins[a] = 0U;
+    }
+}
+
+/* 判"给足占空比仍不动"（小占空比顶不动不算，避免小目标/保持姿态误报） */
+static uint8_t joint_stalled(unsigned a)
+{
+    if (s_still_wins[a] < JOINT_STALL_WINS) return 0U;
+    int32_t dq = s_duty_q[a];
+    if (dq < 0L) dq = -dq;
+    return (uint8_t)((dq >= JOINT_STALL_DUTY_Q) ? 1U : 0U);
+}
+
+/* 点动途中判到顶住：刹车 + 记碰撞，不锁 FAULT（探边界本来就会撞） */
+static void joint_jog_abort(unsigned a)
+{
+    joint_brake(a);
+    s_integral[a] = 0;
+    s_duty_q[a] = 0;
+    s_jog_ms[a] = 0U;
+    s_collide[a] = 1U;
+    s_still_wins[a] = 0U;
+    s_move_acc[a] = 0L;
+    s_win_ms[a] = 0U;
+    s_target_counts[a] = s_pos_counts[a];
+    s_tgt_slew[a] = s_pos_counts[a];
+}
+
+/* 点动一拍：按 JOINT_SLEW_Q 斜坡到恒占空比，到点自动刹 + 目标重同步 */
+static void joint_jog_step(unsigned a)
+{
+    int32_t want = (int32_t)s_jog_dir[a] * s_jog_duty_q[a];
+    int32_t dq = want - s_duty_q[a];
+    if (dq > JOINT_SLEW_Q) dq = JOINT_SLEW_Q;
+    else if (dq < -JOINT_SLEW_Q) dq = -JOINT_SLEW_Q;
+    s_duty_q[a] += dq;
+    joint_apply(a, s_duty_q[a]);
+
+    if (s_jog_ms[a] == 0U) return;
+    s_jog_ms[a] = (uint16_t)(s_jog_ms[a] - 1U);
+    if (s_jog_ms[a] == 0U) {
+        joint_brake(a);
+        s_duty_q[a] = 0;
+        s_target_counts[a] = s_pos_counts[a];
+        s_tgt_slew[a] = s_pos_counts[a];
+    }
 }
 
 /* ======================= 生命周期 ======================= */
@@ -195,11 +315,22 @@ void joint_init(void)
         s_tgt_slew[a] = 0;
         s_fault[a] = 0U;
         s_prev_cnt[a] = kEncTim[kJointEncIdx[a]]->CNT;
+        /* [AI] A6：点动/判撞状态清零 —— 上电不允许任何点动在跑 */
+        s_jog_duty_q[a] = 0;
+        s_jog_dir[a] = 0;
+        s_jog_ms[a] = 0U;
+        s_collide[a] = 0U;
+        s_pos_prev_1k[a] = 0;
+        s_move_acc[a] = 0;
+        s_win_ms[a] = 0U;
+        s_still_wins[a] = 0U;
     }
     s_zeroed = 0U;                      /* 零点未定义：未归零前不驱动 */
     s_estop = 0U;
     s_zero_req = 0U;
     s_clear_req = 0U;
+    s_impact_req = 0U;
+    s_impact_cnt = 0U;
     s_win_cnt = 0U;
     s_btn_low = 0U; s_btn_hold = 0U; s_btn_fired = 0U; s_btn_pressed = 0U;
 
@@ -242,16 +373,112 @@ void joint_fault_clear(void) { s_clear_req = 1U; }
 
 uint8_t joint_btn_pressed(void) { return s_btn_pressed; }
 
+/* ======================= A6：台架点动（任务上下文调用） ======================= */
+
+/* 多个 volatile 字段分步写，ISR 可能读到"半更新"；所以先把 s_jog_ms 置 0 停一拍，
+   写完其余字段再最后置时间 —— 宁可多剥一个 1 ms 周期的刹车。 */
+void joint_jog(uint8_t axis, int8_t dir, int32_t duty_q, uint16_t duration_ms)
+{
+    if (axis >= JOINT_COUNT || dir == 0) return;
+    if (s_estop != 0U || s_fault[axis] != 0U) return;   /* 故障/急停时不接受点动 */
+
+    if (duty_q < 0) duty_q = -duty_q;
+    if (duty_q < JOINT_JOG_DUTY_MIN) duty_q = JOINT_JOG_DUTY_MIN;
+    if (duty_q > JOINT_JOG_DUTY_MAX) duty_q = JOINT_JOG_DUTY_MAX;
+    if (duration_ms == 0U) duration_ms = JOINT_JOG_MS_DEF;
+
+    int8_t d = (dir > 0) ? (int8_t)1 : (int8_t)-1;
+
+    /* 同轴同向的重复按键 = 续时（终端按键自动重复时会连发），
+       不去打断正在跑的点动 —— 否则每按一次都要先刹 1 ms，动作会一顿一顿。 */
+    if (s_jog_ms[axis] != 0U && s_jog_dir[axis] == d) {
+        uint32_t t = (uint32_t)s_jog_ms[axis] + (uint32_t)duration_ms;
+        if (t > JOINT_JOG_MS_MAX) t = JOINT_JOG_MS_MAX;
+        s_jog_duty_q[axis] = duty_q;
+        s_jog_ms[axis] = (uint16_t)t;
+        return;
+    }
+
+    s_jog_ms[axis] = 0U;                 /* 先停一拍 */
+    s_jog_dir[axis] = d;
+    s_jog_duty_q[axis] = duty_q;
+    s_collide[axis] = 0U;                /* 新一次点动清该轴的碰撞记录 */
+    s_still_wins[axis] = 0U;
+    s_move_acc[axis] = 0L;
+    s_win_ms[axis] = 0U;
+    s_pos_prev_1k[axis] = s_pos_counts[axis];
+    /* 点动期间位置环不执行，但目标也不能留在旧值 —— 否则点动结束的瞬间
+       位置环会"向旧目标追赶"，把点动位移当成误差。 */
+    s_target_counts[axis] = s_pos_counts[axis];
+    s_tgt_slew[axis] = s_pos_counts[axis];
+    s_jog_ms[axis] = duration_ms;        /* 最后放行 */
+}
+
+void joint_jog_stop(void)
+{
+    for (unsigned a = 0U; a < JOINT_COUNT; ++a) s_jog_ms[a] = 0U;
+}
+
+uint8_t joint_jog_active(void)
+{
+    uint8_t b = 0U;
+    for (unsigned a = 0U; a < JOINT_COUNT; ++a) if (s_jog_ms[a] != 0U) b |= (uint8_t)(1U << a);
+    return b;
+}
+
+uint8_t joint_jog_axis_active(uint8_t axis)
+{
+    return (axis >= JOINT_COUNT) ? 0U : (uint8_t)((s_jog_ms[axis] != 0U) ? 1U : 0U);
+}
+
+void joint_jog_set_duty(int32_t duty_q)
+{
+    if (duty_q < JOINT_JOG_DUTY_MIN) duty_q = JOINT_JOG_DUTY_MIN;
+    if (duty_q > JOINT_JOG_DUTY_MAX) duty_q = JOINT_JOG_DUTY_MAX;
+    s_jog_duty_sel = duty_q;
+}
+
+int32_t joint_jog_get_duty(void) { return s_jog_duty_sel; }
+
+uint8_t joint_collide(void)
+{
+    uint8_t b = 0U;
+    for (unsigned a = 0U; a < JOINT_COUNT; ++a) if (s_collide[a] != 0U) b |= (uint8_t)(1U << a);
+    return b;
+}
+
+int32_t joint_duty_q(unsigned axis)
+{
+    return (axis >= JOINT_COUNT) ? 0L : s_duty_q[axis];
+}
+
+/* [AI] A7：加速度计碰撞确认（任务上下文置请求，ISR 下一拍落地） */
+void joint_note_impact(void) { s_impact_req = 1U; }
+
+uint32_t joint_impact_cnt(void) { return s_impact_cnt; }
+
 void joint_set_target_deg10(unsigned axis, uint16_t deg10)
 {
     if (axis >= JOINT_COUNT) return;
-    if (deg10 > JOINT_ANGLE_MAX_DEG10) deg10 = JOINT_ANGLE_MAX_DEG10;
-    s_target_counts[axis] = s_zero_counts[axis] + counts_of_deg10(deg10);
+    int32_t d = (int32_t)deg10;
+    if (d > (int32_t)JOINT_PROTO_MAX_DEG10) d = (int32_t)JOINT_PROTO_MAX_DEG10;
+    /* [AI] A6：软限位逐轴可关，启用时同时钳制目标（J1 连续旋转默认不钳） */
+    if (kJointLimitOn[axis] != 0U) {
+        if (d < kJointLimitMinDeg10[axis]) d = kJointLimitMinDeg10[axis];
+        if (d > kJointLimitMaxDeg10[axis]) d = kJointLimitMaxDeg10[axis];
+    }
+    s_target_counts[axis] = s_zero_counts[axis] + counts_of_deg10(d);
 }
 
 uint16_t joint_actual_deg10(unsigned axis)
 {
     if (axis >= JOINT_COUNT) return 0U;
+    return deg10_proto(s_pos_counts[axis] - s_zero_counts[axis]);
+}
+
+int32_t joint_actual_deg10_signed(unsigned axis)
+{
+    if (axis >= JOINT_COUNT) return 0L;
     return deg10_of_counts(s_pos_counts[axis] - s_zero_counts[axis]);
 }
 
@@ -287,6 +514,9 @@ static void joint_zero_apply(void)
         s_duty_q[a] = 0;
         s_fault[a] = 0U;
         joint_brake(a);
+        /* [AI] A6：置零同时取消点动/碰撞记录（置零是人主动定义基准位） */
+        s_jog_ms[a] = 0U;
+        s_collide[a] = 0U;
     }
     s_zeroed = 1U;
 }
@@ -295,17 +525,17 @@ static void joint_fault_clear_apply(void)
 {
     for (unsigned a = 0U; a < JOINT_COUNT; ++a) {
         if (s_fault[a] == 0U) continue;
-        int32_t e = s_target_counts[a] - s_pos_counts[a];
-        int32_t rel = s_pos_counts[a] - s_zero_counts[a];
-        int32_t lo = counts_of_deg10(JOINT_ANGLE_MIN_DEG10) -
-                     counts_of_deg10(JOINT_TRAVEL_MARGIN_DEG10);
-        int32_t hi = counts_of_deg10(JOINT_ANGLE_MAX_DEG10) +
-                     counts_of_deg10(JOINT_TRAVEL_MARGIN_DEG10);
-        if (e <= JOINT_ERR_FAULT && e >= -JOINT_ERR_FAULT && rel > lo && rel < hi) {
+        /* [AI] A6：清位时先判软限位（未启用软限位的轴永远为 0）；跟随误差在清位时
+           **不参与判定** —— 目标重同步到当前位置，否则撞过限位后永远清不了位。 */
+        if (joint_out_of_limit(a) == 0U) {
             s_fault[a] = 0U;
             s_integral[a] = 0;
             s_duty_q[a] = 0;
+            s_target_counts[a] = s_pos_counts[a];
             s_tgt_slew[a] = s_pos_counts[a];   /* 斜坡从当前位置重新起步 */
+            s_still_wins[a] = 0U;
+            s_move_acc[a] = 0L;
+            s_win_ms[a] = 0U;
         }
     }
 }
@@ -357,6 +587,7 @@ void joint_isr(void)
             joint_brake(a);
             s_duty_q[a] = 0;
             s_integral[a] = 0;
+            s_jog_ms[a] = 0U;            /* [AI] A6: 急停同时取消点动 */
         }
         isr_end(t0);
         return;
@@ -368,9 +599,39 @@ void joint_isr(void)
     /* ---- 4) 1 kHz：状态请求 + 位置 PI + 输出 ---- */
     if (s_zero_req != 0U)  { s_zero_req = 0U;  joint_zero_apply(); }
     if (s_clear_req != 0U) { s_clear_req = 0U; joint_fault_clear_apply(); }
+    if (s_impact_req != 0U) {
+        /* [AI] A7: 加速度计确认撞击 —— 取消正在跑的点动并记碰撞（不在 ISR 里算浮点） */
+        s_impact_req = 0U;
+        if (s_impact_cnt < 0xFFFFFFFFUL) s_impact_cnt++;
+        for (unsigned a = 0U; a < JOINT_COUNT; ++a) {
+            if (s_jog_ms[a] != 0U) joint_jog_abort(a);
+        }
+    }
 
     for (unsigned a = 0U; a < JOINT_COUNT; ++a) {
-        if (s_zeroed == 0U || s_fault[a] != 0U) {
+        /* [AI] A6: 1 kHz 位移统计 —— 与是否点动无关，判撞只看位移与占空比 */
+        joint_track_motion(a);
+
+        if (s_fault[a] != 0U) {
+            joint_brake(a);
+            s_duty_q[a] = 0;
+            s_integral[a] = 0;
+            s_jog_ms[a] = 0U;
+            continue;
+        }
+
+        /* [AI] A6: 点动优先于位置环（且**不需要先归零**）——
+           判到顶住就刹车，不锁故障；时间到自动刹。 */
+        if (s_jog_ms[a] != 0U) {
+            if (joint_stalled(a) != 0U) {
+                joint_jog_abort(a);
+                continue;
+            }
+            joint_jog_step(a);
+            continue;
+        }
+
+        if (s_zeroed == 0U) {
             joint_brake(a);
             s_duty_q[a] = 0;
             s_integral[a] = 0;
@@ -394,20 +655,24 @@ void joint_isr(void)
             continue;
         }
 
-        /* 软限位（含容差）：越界即 FAULT（未标定范围时容差给足，只拦飞车） */
-        {
-            int32_t rel = s_pos_counts[a] - s_zero_counts[a];
-            int32_t lo = counts_of_deg10(JOINT_ANGLE_MIN_DEG10) -
-                         counts_of_deg10(JOINT_TRAVEL_MARGIN_DEG10);
-            int32_t hi = counts_of_deg10(JOINT_ANGLE_MAX_DEG10) +
-                         counts_of_deg10(JOINT_TRAVEL_MARGIN_DEG10);
-            if (rel < lo || rel > hi) {
-                s_fault[a] = 1U;
-                joint_brake(a);
-                s_duty_q[a] = 0;
-                s_integral[a] = 0;
-                continue;
-            }
+        /* [AI] A6: 位置环模式的堵转/撞限位 —— 正在追目标（超死区）且占空比已≥阈值
+           却 200 ms 不动 → 锁 FAULT（比点动严重：说明跟踪已失效）。 */
+        if ((err > JOINT_DEADBAND || err < -JOINT_DEADBAND) && joint_stalled(a) != 0U) {
+            s_fault[a] = 1U;
+            s_collide[a] = 1U;
+            joint_brake(a);
+            s_duty_q[a] = 0;
+            s_integral[a] = 0;
+            continue;
+        }
+
+        /* 软限位（含容差，逐轴可关）：越界即 FAULT（未启用时恒不越界） */
+        if (joint_out_of_limit(a) != 0U) {
+            s_fault[a] = 1U;
+            joint_brake(a);
+            s_duty_q[a] = 0;
+            s_integral[a] = 0;
+            continue;
         }
 
         /* 死区：死区内不加积分（防在噪声带里泵占空比导致嗡嗡抖） */

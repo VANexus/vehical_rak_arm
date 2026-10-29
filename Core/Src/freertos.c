@@ -22,14 +22,19 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
-#include "iwdg.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_dbg.h"
 #include "app_arm.h"
+#include "app_bench.h"
+#include "app_buzz.h"
 #include "app_can.h"
 #include "app_can_diag.h"
+#include "app_imu.h"
 #include "app_joint.h"
+#include "app_oled.h"
+#include "iwdg.h"          /* [AI] A8: CubeMX 重生成后这行会丢，放进 USER CODE 块留住 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,6 +70,8 @@ static void task_can_rx(void *argument);
 static void task_can_tx(void *argument);
 static void task_status(void *argument);
 static void task_can_diag(void *argument);   /* [AI] A3: CAN 互通诊断打印 */
+static void task_bench(void *argument);      /* [AI] A6: 台架串口控制台 */
+static void task_imu(void *argument);        /* [AI] A7: 板载 IMU 200 Hz 采样 */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -111,14 +118,23 @@ void MX_FREERTOS_Init(void) {
   /* [AI] A3: 诊断线程（1 Hz 打一行 CAN 统计）。栈给 2048 B —— snprintf 需要。 */
   static const osThreadAttr_t candg_attr = {
     .name = "candg", .stack_size = 2048, .priority = (osPriority_t) osPriorityLow };
+  /* [AI] A6: 台架控制台线程。栈 2048 B（vsnprintf）；优先级 Low（不能抢 1 kHz 收发）。 */
+  static const osThreadAttr_t bench_attr = {
+    .name = "bench", .stack_size = 2048, .priority = (osPriority_t) osPriorityLow };
+  /* [AI] A7: IMU 采样线程（200 Hz，软 I2C 块读）。优先级 Normal：不能抢 1 kHz 收发。 */
+  static const osThreadAttr_t imu_attr = {
+    .name = "imu", .stack_size = 2048, .priority = (osPriority_t) osPriorityNormal };
   /* [AI]  创建失败 = 堆不足。静默跑下去板子看起来"活着"但 CAN 全哑——
      这是最难查的失败模式，所以显式兜底（A1: 已无 ctrl 线程）。 */
   osThreadId_t h_canrx = osThreadNew(task_can_rx, NULL, &canrx_attr);  /* [AI]  CAN 接收解析 */
   osThreadId_t h_cantx = osThreadNew(task_can_tx, NULL, &cantx_attr);  /* [AI]  1kHz 发送 */
   osThreadId_t h_stat  = osThreadNew(task_status, NULL, &stat_attr);   /* [AI]  10Hz 喂狗 */
   osThreadId_t h_candg = osThreadNew(task_can_diag, NULL, &candg_attr);/* [AI] A3: CAN 诊断打印 */
+  osThreadId_t h_bench = osThreadNew(task_bench, NULL, &bench_attr);   /* [AI] A6: 台架串口控制台 */
+  osThreadId_t h_imu   = osThreadNew(task_imu, NULL, &imu_attr);       /* [AI] A7: IMU 采样 */
   if (defaultTaskHandle == NULL || h_canrx == NULL ||
-      h_cantx == NULL || h_stat == NULL || h_candg == NULL) {
+      h_cantx == NULL || h_stat == NULL || h_candg == NULL || h_bench == NULL ||
+      h_imu == NULL) {
     Error_Handler();
   }
   /* USER CODE END RTOS_THREADS */
@@ -139,11 +155,18 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  BOOT_MARK(6);
   (void)argument;   /* [AI]  未使用（其余四个任务同款写法），-Wextra 要求显式 */
 
   /* [AI] A2: 启动 J1/J2 的 25 kHz 位置环（TIM6 中断宿主 = stm32f4xx_it.c 的
      TIM6_DAC_IRQHandler）。与底盘板同思路：boot 与实时中断解耦，调度器起来后再开。 */
   joint_start_isr();
+  BOOT_MARK(61);   /* 25 kHz 环已启动 */
+
+  /* [AI] A6: 台架串口控制台初始化（建队列/互斥量 + 启动 USART1 单字节接收）。
+     必须在调度器起来后调（用到 FreeRTOS 队列/信号量）。 */
+  bench_init();
+  BOOT_MARK(62);   /* 台架控制台已初始化 */
 
   /* [AI] A2: J3..J6 舵机标定沿用迁移前实测记录（ch1=PC7=J5、ch2=PC8=J4、
      ch3=PC9=J3、ch0=PC6=J6；MG995/996R 500µs=0°、2500µs=270°）。
@@ -151,6 +174,7 @@ void StartDefaultTask(void *argument)
      J1(ch5)/J2(ch4) 已改电机，不再适用本条。 */
   for(;;)
   {
+    BOOT_MARK(63);
     osDelay(1000);
   }
   /* USER CODE END StartDefaultTask */
@@ -181,11 +205,13 @@ static void task_can_tx(void *argument)
 
 static void task_status(void *argument)
 {
+  BOOT_MARK(7);
   (void)argument;
   TickType_t last = xTaskGetTickCount();
   for (;;) {
-    HAL_IWDG_Refresh(&hiwdg);                       /* [AI]  A1: 10Hz 喂狗(原 car_feed_watchdog 同体) */
-    /* [AI] A5: OLED 已从本板移除（占 PD11-14 四根 GPIO，且调试信息改由 USART 输出） */
+    uint32_t now = HAL_GetTick();
+    HAL_IWDG_Refresh(&hiwdg);                       /* [AI]  A1: 10Hz 喂狗 */
+    oled_show_step(now);                            /* [AI] A9: SSD1306（PD11-14 软 SPI） */
     vTaskDelayUntil(&last, pdMS_TO_TICKS(100));     /* 10 Hz */
   }
 }
@@ -194,6 +220,18 @@ static void task_status(void *argument)
 static void task_can_diag(void *argument)
 {
   app_can_diag_task(argument);
+}
+
+/* [AI] A6: 台架串口控制台 —— 只调 app_joint 的公开 API，不直接碰 PWM/编码器 */
+static void task_bench(void *argument)
+{
+  bench_task(argument);
+}
+
+/* [AI] A7: IMU 采样线程 */
+static void task_imu(void *argument)
+{
+  imu_arm_task(argument);
 }
 
 /* [AI]  ---- FreeRTOS 失败钩子（configCHECK_FOR_STACK_OVERFLOW=2 / malloc hook）----

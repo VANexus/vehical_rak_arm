@@ -10,6 +10,7 @@
  * 打印内容与判据见 app_can_diag.h。
  */
 #include "app_can_diag.h"
+#include "app_bench.h"
 #include "app_build.h"
 #include "app_can.h"
 #include "main.h"
@@ -49,9 +50,10 @@ void app_can_diag_task(void *argument)
                                       ? n : (int)sizeof(line) - 1);
             /* [AI] A3: 两路串口都发。C30D 有两个 CH9102F USB 口：
                USART1(PA9/PA10) = 调试口，USART3(PD8/PD9) = 对外通讯口。
-               台架上插的是哪一个不确定，所以两路都打，插哪个都能读到。 */
-            (void)HAL_UART_Transmit(&huart1, (uint8_t *)line, len, 100U);
-            (void)HAL_UART_Transmit(&huart3, (uint8_t *)line, len, 100U);
+               台架上插的是哪一个不确定，所以两路都打，插哪个都能读到。
+               [AI] A6: 改走 bench_write() —— 与控制台共用唯一串口写入口与互斥，
+               否则两个任务同时调 HAL_UART_Transmit 会把 huart 状态打乱。 */
+            bench_write(line, len);
         }
         osDelay(1000U);
     }

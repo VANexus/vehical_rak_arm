@@ -14,6 +14,8 @@
 #include "app_can.h"
 #include "app_arm.h"
 #include "app_build.h"
+#include "app_buzz.h"
+#include "app_imu.h"
 #include "app_joint.h"
 #include "main.h"
 #include "can.h"
@@ -49,6 +51,12 @@ static volatile uint32_t s_rx_cnt[CAN_DIAG_ID_SLOTS];
 static volatile uint32_t s_rx_other;
 static volatile uint32_t s_tx_ok;
 static volatile uint32_t s_tx_fail;
+
+/* [AI] A7：从底盘板 0x202 WHEEL_SPD 推出“车在动”——ISR 里算，任务只读。 */
+#define VEH_MOVING_SPD_RAW   5      /* 0.01 rad/s 单位；5 = 0.05 rad/s ≈ 2.9°/s */
+#define VEH_MOVING_HOLD_MS   200U
+static volatile uint8_t  s_veh_moving;
+static volatile uint32_t s_veh_seen_ms;
 
 /* ISR 侧调用：按标准 ID 计数。ID 0 不在 v4 帧集里，可当空槽标记。 */
 static void diag_count_rx(uint32_t id)
@@ -154,6 +162,20 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (f.id == ARM_CMD_A_ID || f.id == ARM_CMD_B_ID) {
             (void)xQueueSendFromISR(rx_queue, &f, &woken);
         }
+        /* [AI] A7: 底盘板轮速（0x202）—— 只用来判“车在不在动”，不进队列。
+           四路各 int16（0.01 rad/s），任一超过阈值就置“在动”。 */
+        if (f.id == WHEEL_SPD_ID) {
+            int16_t w1 = (int16_t)get_le16(&f.data[0]);
+            int16_t w2 = (int16_t)get_le16(&f.data[2]);
+            int16_t w3 = (int16_t)get_le16(&f.data[4]);
+            int16_t w4 = (int16_t)get_le16(&f.data[6]);
+            int32_t m = w1 < 0 ? -(int32_t)w1 : (int32_t)w1;
+            int32_t t = w2 < 0 ? -(int32_t)w2 : (int32_t)w2; if (t > m) m = t;
+            t = w3 < 0 ? -(int32_t)w3 : (int32_t)w3; if (t > m) m = t;
+            t = w4 < 0 ? -(int32_t)w4 : (int32_t)w4; if (t > m) m = t;
+            s_veh_moving = (uint8_t)((m > VEH_MOVING_SPD_RAW) ? 1U : 0U);
+            s_veh_seen_ms = HAL_GetTick();
+        }
         /* 其余 ID（轮速/轮遥测/其他节点）本节点不消费，静默丢弃 */
     }
     portYIELD_FROM_ISR(woken);
@@ -224,6 +246,14 @@ uint32_t app_can_busoff_cnt(void) { return busoff_cnt; }
    这里直读 ESR 原值（只读，不改任何寄存器），由人按位段判断。 */
 uint32_t app_can_esr(void) { return (uint32_t)hcan1.Instance->ESR; }
 
+/* [AI] A7：车在不在动。帧断流（>200 ms 没收到 0x202）按“不在动”处理 ——
+   保守方向：不把“车在动时的颠簸”误当成机械臂碰撞。 */
+uint8_t app_can_vehicle_moving(void)
+{
+    if ((uint32_t)(HAL_GetTick() - s_veh_seen_ms) > VEH_MOVING_HOLD_MS) return 0U;
+    return s_veh_moving;
+}
+
 /* Task_CAN_Tx：1 kHz 底拍。相位错开避免同拍挤爆 3 个发送邮箱：
    轮位类底盘帧本板不发；臂帧 20+5 ms（A/B 两帧分相位）、DIAG 55 ms、NODE_INFO 999 ms。 */
 void can_tx_task_step(uint32_t now_ms)
@@ -231,6 +261,8 @@ void can_tx_task_step(uint32_t now_ms)
     static unsigned ph;
     static uint8_t busoff_prev;
     uint8_t d[8];
+
+    buzz_tick(now_ms);   /* [AI] A8: 蜂鸣器状态机（1 kHz 推进，非阻塞） */
 
     /* 邮箱死锁自愈（沿用底盘板方案：任一邮箱忙超 150 ms 强制 ABRQ） */
     {
@@ -285,6 +317,19 @@ void can_tx_task_step(uint32_t now_ms)
         put_le16(&d[4], 0U);                     /* 夹爪：本板无硬件通道 */
         put_le16(&d[6], 0U);                     /* RSVD16 */
         (void)can_tx(SERVO_STATE_B_ID, d);
+    }
+    if (ph % 10U == 7U) {                        /* [AI] A7: 100 Hz：ARM_IMU（0x222） */
+        float g[3];
+        imu_arm_gyro_dps(g);
+        int32_t gz = (int32_t)(g[2] * 100.0f);    /* 0.01°/s */
+        if (gz > 32767)  gz = 32767;
+        if (gz < -32767) gz = -32767;
+        put_le16(&d[0], (uint16_t)(int16_t)gz);
+        put_le16(&d[2], imu_arm_amag_mg());
+        d[4] = imu_arm_events();
+        d[5] = imu_arm_age_ms();
+        put_le16(&d[6], 0U);                     /* RSVD16 */
+        (void)can_tx(ARM_IMU_ID, d);
     }
     if (ph % 100U == 55U) {                      /* 10 Hz：ARM_DIAG（55: 避开臂帧相位） */
         /* [AI] A2: FAULT_u16 仍发 0（冻结协议：不新增位语义）；

@@ -13,6 +13,8 @@
  */
 #include "app_arm.h"
 
+#include "app_buzz.h"
+#include "app_imu.h"
 #include "app_joint.h"
 #include "app_servo.h"
 #include "main.h"
@@ -53,6 +55,14 @@ void arm_init(void)
     /* [AI] A2: J1/J2 增量编码器电机闭环（app_joint）。
        上电只刹车、不驱动；零点未定义（未归零前 J1/J2 不接受指令）。 */
     joint_init();
+
+    /* [AI] A7: 板载 IMU（PB10/PB11 软 I2C，双芯片探测）。
+       只做碰撞确认/重力方向/陀螺互校；找不到芯片不影响其它功能。 */
+    (void)imu_arm_init();
+
+    /* [AI] A8: 蜂鸣器（PA8）—— 上电自检短响一声 = 固件起来了、任务都建住了 */
+    buzz_init();
+    buzz_alert(BUZZ_BOOT);
 }
 
 void arm_command_deg10(const uint16_t deg10[7], uint8_t valid_mask)
@@ -71,8 +81,11 @@ void arm_command_deg10(const uint16_t deg10[7], uint8_t valid_mask)
         if (axis < ARM_JOINT_AXIS_COUNT) {
             /* [AI] A2: J1/J2 = 增量编码器电机位置闭环（app_joint）。
                仅在**远程门开**时接受目标（否则保持当前姿态）；
-               未归零 / 急停 / 故障时 app_joint 内部自行刹车，本层无需再判。 */
-            if ((valid_mask & (1U << axis)) != 0U && s_remote != 0U) {
+               未归零 / 急停 / 故障时 app_joint 内部自行刹车，本层无需再判。
+               [AI] A6: 该轴正在台架点动时**丢弃**远程目标 —— 否则位置环与点动
+               会抢同一个轴（点动结束后目标已重同步到当前位置，需重新发指令）。 */
+            if ((valid_mask & (1U << axis)) != 0U && s_remote != 0U &&
+                joint_jog_axis_active((uint8_t)axis) == 0U) {
                 joint_set_target_deg10(axis, deg10[axis]);
             }
             continue;
@@ -96,6 +109,7 @@ void arm_estop_latch(void)
 {
     s_estop = 1U;
     s_remote = 0U;
+    buzz_alert(BUZZ_FAULT);   /* [AI] A8: 急停锁存长响 */
     /* 舵机（J3..J6）不动 PWM：保持当前位置（急停语义 = 冻结，不是归零）。
        [AI] A2: J1/J2 是电机，必须**主动断电**——置门后下一个 25 kHz 节拍
        （≤40 µs）立即短路制动，本函数可在 CAN ISR 上下文调用。 */

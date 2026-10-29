@@ -22,6 +22,7 @@
 #include "adc.h"
 #include "can.h"
 #include "dma.h"
+#include "i2c.h"
 #include "iwdg.h"
 #include "tim.h"
 #include "usart.h"
@@ -112,6 +113,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_TIM2_Init();
   MX_TIM5_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   arm_init();      /* [AI]  A2: 复位原因 + J3..J6 舵机 Home 安全位 + J1/J2 电机刹车
                       (外设初始化由 MX_TIM8/12 舵机、MX_TIM1/9/10/11 电机 PWM、
