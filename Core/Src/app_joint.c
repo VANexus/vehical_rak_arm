@@ -50,7 +50,14 @@ static const int8_t  kJointSign[JOINT_COUNT]    = { 1, 1 };
        （台架当前约 4-5 点方向 ↔ 7-8 点方向，具体角度随装配变化）。
    默认两轴都**关闭**软限位，靠下面的碰撞/堵转判定做保护；实测出行程后把
    kJointLimitOn[axis] 置 1 并填 min/max（相对零点），重新编译即生效。 */
-#define JOINT_PROTO_MAX_DEG10     2700U   /* 协议字段上限（无符号 270.0°） */
+/* ---- 协议字段上限（无符号 0.1°，**逐轴**）----
+   [AI] A17：按用户 2026-10-30 确认的机械臂结构定稿：
+   - J1（腰）= 360° 有限位旋转（**不**连续转；手动归零，软限位后补）→ 上限 3600；
+   - J2（大臂）= 机械限位轴，零点选在行程一端（协议字段无符号，负角发不出）；
+     行程实测前上限同样放宽到 3600（软限位仍关，靠碰撞/堵转判定兜底；
+     实测行程后回填 kJointLimit* 并可收紧本值）。
+   J3..J6 是舵机，不走本表（app_arm.c 满量程 2700 = 270.0°）。 */
+static const uint16_t kJointProtoMaxDeg10[JOINT_COUNT] = { 3600U, 3600U };
 #define JOINT_TRAVEL_MARGIN_DEG10 200U    /* 越界容差 20°：只拦飞车，不误报正常超调 */
 
 static const uint8_t kJointLimitOn[JOINT_COUNT]       = { 0U, 0U };
@@ -217,12 +224,13 @@ static int32_t deg10_of_counts(int32_t counts)
     return (counts * 100L) / (int32_t)JOINT_CNT_PER_DEG10_X100;
 }
 
-/* 相对零点 → 协议无符号字段（0..2700 饱和） */
-static uint16_t deg10_proto(int32_t counts_rel)
+/* 相对零点 → 协议无符号字段（0..逐轴上限，饱和） */
+static uint16_t deg10_proto(unsigned axis, int32_t counts_rel)
 {
     int32_t d = deg10_of_counts(counts_rel);
+    int32_t hi = (int32_t)kJointProtoMaxDeg10[axis];
     if (d < 0L) return 0U;
-    if (d > (int32_t)JOINT_PROTO_MAX_DEG10) return (uint16_t)JOINT_PROTO_MAX_DEG10;
+    if (d > hi) return (uint16_t)hi;
     return (uint16_t)d;
 }
 
@@ -461,19 +469,21 @@ void joint_set_target_deg10(unsigned axis, uint16_t deg10)
 {
     if (axis >= JOINT_COUNT) return;
     int32_t d = (int32_t)deg10;
-    if (d > (int32_t)JOINT_PROTO_MAX_DEG10) d = (int32_t)JOINT_PROTO_MAX_DEG10;
     /* [AI] A6：软限位逐轴可关，启用时同时钳制目标（J1 连续旋转默认不钳） */
     if (kJointLimitOn[axis] != 0U) {
         if (d < kJointLimitMinDeg10[axis]) d = kJointLimitMinDeg10[axis];
         if (d > kJointLimitMaxDeg10[axis]) d = kJointLimitMaxDeg10[axis];
     }
+    /* [AI] A17：协议上限逐轴（J1/J2 = 3600 = 360.0°，见 kJointProtoMaxDeg10 注释） */
+    int32_t hi = (int32_t)kJointProtoMaxDeg10[axis];
+    if (d > hi) d = hi;
     s_target_counts[axis] = s_zero_counts[axis] + counts_of_deg10(d);
 }
 
 uint16_t joint_actual_deg10(unsigned axis)
 {
     if (axis >= JOINT_COUNT) return 0U;
-    return deg10_proto(s_pos_counts[axis] - s_zero_counts[axis]);
+    return deg10_proto(axis, s_pos_counts[axis] - s_zero_counts[axis]);
 }
 
 int32_t joint_actual_deg10_signed(unsigned axis)

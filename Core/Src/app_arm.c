@@ -28,9 +28,11 @@ static volatile uint8_t  s_cmd_seen;
 static uint32_t          s_boot_ms;
 static uint8_t           s_reset_cause = '-';
 
-/* [AI] A2: J3..J6 → 舵机通道（J1=ch5/J2=ch4 两路舵机随电机改造**已停用**）。
-   装臂实测接线：J3=ch3 J4=ch2 J5=ch1 J6=ch0（PC9/PC8/PC7/PC6，TIM8_CH4..CH1）。 */
-static const unsigned k_servo_ch[ARM_AXIS_COUNT - ARM_JOINT_AXIS_COUNT] = { 3U, 2U, 1U, 0U };
+/* [AI] A17（2026-10-30 用户定稿，旧 ch3..ch0 映射作废）：
+   J3..J6 → 舵机通道 ch0..ch3 = **PC6/PC7/PC8/PC9**（TIM8_CH1..CH4）。
+   四路全是 **PWM 位置舵机**——J1/J6 曾按"连续旋转舵机（角度值=速度偏置）"解释的
+   约定随之**整体作废**（J1 已是编码器电机，J6 现在也是位置舵机）。 */
+static const unsigned k_servo_ch[ARM_AXIS_COUNT - ARM_JOINT_AXIS_COUNT] = { 0U, 1U, 2U, 3U };
 
 void arm_init(void)
 {

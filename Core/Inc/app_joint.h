@@ -94,7 +94,7 @@ uint8_t joint_collide(void);
 void joint_note_impact(void);
 uint32_t joint_impact_cnt(void);
 
-/* 观测量（上层只读）：当前施加的占空比（0.01%）/ 有符号 0.1°（J1 连续旋转可为负） */
+/* 观测量（上层只读）：当前施加的占空比（0.01%）/ 有符号 0.1°（越过零点时为负） */
 int32_t joint_duty_q(unsigned axis);
 int32_t joint_actual_deg10_signed(unsigned axis);
 
@@ -102,8 +102,9 @@ int32_t joint_actual_deg10_signed(unsigned axis);
 void joint_set_target_deg10(unsigned axis, uint16_t deg10);
 
 /* 反馈（0.1°，相对零点；由编码器累计计数换算，分辨率 0.005859°/计数）。
-   协议字段是无符号 0..2700，超范围会被饱和；要看真实有符号角度用
-   joint_actual_deg10_signed()（J1 连续旋转会越过 0/360）。 */
+   协议字段是无符号、逐轴上限（[AI] A17：J1/J2 = 0..3600 即 0..360.0°），
+   超范围会被饱和；要看真实有符号角度用
+   joint_actual_deg10_signed()（未归零漂移或越过零点时会出负值）。 */
 uint16_t joint_actual_deg10(unsigned axis);
 int32_t  joint_pos_counts(unsigned axis);   /* 原始累计计数（相对零点） */
 int32_t  joint_err_counts(unsigned axis);   /* 目标 - 实际（counts） */
