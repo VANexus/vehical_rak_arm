@@ -144,6 +144,33 @@ void app_canopen_step(uint32_t now_ms)
         s_last_seq = seq;
         s_seq_ms = now_ms;
         s_seq_seen = 1U;
+
+        /* [AI] A18：cmd_flags 边沿动作（点动/清故障/归零，仅在新 seq 时采一次）。
+         *   bit0 = 远程使能（原有，电平语义，下面 enable 门用）
+         *   bit1 = 清 J1/J2 故障（等价串口 'c'）
+         *   bit2/3 = J1 点动 +/−，bit4/5 = J2 点动 +/−（等价串口 1/2/3/4）
+         *   bit6 = 软件归零（等价串口 'k' / PE0 长按：当前位置 = 0.0°，同时清故障）
+         * 点动走 joint_jog：不锁故障、撞限位即停、到时自动刹——台架探测用。
+         * 重复发同一 bit（seq 递增）可续长，与串口连按同语义。 */
+        uint16_t acts = OD_RAM.x2141_cmd_flags;
+        if ((acts & 0x0002U) != 0U) {
+            joint_fault_clear();
+        }
+        if ((acts & 0x0040U) != 0U) {
+            joint_set_zero();
+        }
+        if ((acts & 0x0004U) != 0U) {
+            joint_jog(0U, 1, joint_jog_get_duty(), 0U);
+        }
+        if ((acts & 0x0008U) != 0U) {
+            joint_jog(0U, -1, joint_jog_get_duty(), 0U);
+        }
+        if ((acts & 0x0010U) != 0U) {
+            joint_jog(1U, 1, joint_jog_get_duty(), 0U);
+        }
+        if ((acts & 0x0020U) != 0U) {
+            joint_jog(1U, -1, joint_jog_get_duty(), 0U);
+        }
     }
 
     uint8_t enable = 0U;
