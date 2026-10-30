@@ -71,7 +71,7 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_STALL_DUTY_Q   1500L   /* ≥15% 占空比才判：低于此不足以顶住机械限位 */
 #define JOINT_STALL_WIN_MS    100U   /* 判速窗口 */
 #define JOINT_STALL_CPM100     30L   /* 每 100 ms 位移下限（counts） */
-#define JOINT_STALL_WINS        2U   /* 连续窗口数 */
+#define JOINT_STALL_WINS        4U   /* 连续窗口数（A19：200ms→400ms，给静摩擦突破留时间） */
 
 /* ---- 台架点动（A6）---- */
 #define JOINT_JOG_DUTY_DEF   2500L   /* 默认 25%：慢速，撞上也是轻碰 */
@@ -87,7 +87,9 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_KI_DEN    50L
 #define JOINT_I_LIMIT   300000L  /* 积分限幅（counts·ms）≈ 100 counts 误差持续 3 s */
 #define JOINT_DEADBAND     8L    /* counts，≈0.05°：死区内冻结积分，防抖动泵占空比 */
-#define JOINT_DUTY_LIM  8500L    /* 0.01% → 85%（与底盘板 MAX_DUTY_PERCENT 同口径） */
+#define JOINT_DUTY_LIM  9500L    /* 0.01% → 95%（A19：85%→95%。台架实录 J1 静摩擦下
+                                    85% 零位移；底盘 R 系列起步静摩擦 ~75% 转述，
+                                    臂减速箱更沉。95% + 堵转窗口 400ms 兜底） */
 #define JOINT_SLEW_Q    2000L    /* 每 1 ms 允许的占空比变化（0.01%）→ 20%/ms 斜坡 */
 #define JOINT_TGT_SLEW  1000L    /* 目标斜坡：每 1 ms 最多 1000 counts ≈ 35°/s（[AI] 待整定）
                                     作用：把"指令大跳变"变成受控斜坡，从而让下面的
