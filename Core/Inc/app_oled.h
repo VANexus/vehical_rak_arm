@@ -9,11 +9,6 @@
    （J1/J2 = 编码器回读），y30 = 模式机 + 指令流 + 指令异常计数，
    y40 = Home 安全位自检提示，y50 = J1/J2 电机轴状态/归零/故障/按键。 */
 
-void oled_show_step(uint32_t now_ms);
-
-/* [AI] A13：CAN 0x033 UI_CMD 用 —— 页面选择 / 对比度 / 反白 */
-void oled_set_page(uint8_t page);      /* 0=自动 1=关节 2=IMU 3=诊断 4=自检条纹 */
-void oled_set_contrast(uint8_t c);
-void oled_set_invert(uint8_t on);   /* [AI] A9：10 Hz 调用，5 Hz 重绘 */   /* [AI]  10Hz 任务里调；内部 5Hz 重绘 */
+void oled_show_step(uint32_t now_ms);   /* [AI]  10Hz 任务里调；内部 5Hz 重绘 */
 
 #endif /* APP_OLED_H */

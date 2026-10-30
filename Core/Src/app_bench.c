@@ -22,7 +22,7 @@
 #include "app_build.h"
 #include "app_dbg.h"
 #include "app_buzz.h"
-#include "app_can.h"
+#include "app_canopen.h"
 #include "app_imu.h"
 #include "app_joint.h"
 #include "main.h"

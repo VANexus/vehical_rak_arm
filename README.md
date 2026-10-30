@@ -1,5 +1,53 @@
 # vehical_rak_arm — 机械臂板固件（STM32F407VET6 / C30D）
 
+## CANopen v5（当前生效的通信栈）
+
+- 规范件：`docs/CANOPEN-V5.md`；设计与实测进度：`docs/CANOPEN-V5-DESIGN.md`（同步自伞形 `docs/superpowers/specs/`）。
+- 现成栈：`third_party/canopen/CANopenNode`（v4，含 CiA 304 SRDO）+ `CANopenNode_STM32`（官方 HAL 移植层），Apache-2.0；
+  对上游的 4 处改动与原因见 `third_party/canopen/PATCHES.md`（**改上游必须记**）。
+- 节点：本仓 **node 2**（机械臂板）；另一块板 node 1，Jetson = NMT 主站 node 127。SYNC 2 ms。
+- 对象清单（单一来源）：`docs/canopen/arm.json` → `docs/canopen/arm.eds` → `Core/Inc/OD.h` + `Core/Src/OD.c`。
+
+### 改了对象/PDO 之后怎么重生成（不要手改 OD.c/OD.h）
+
+```bash
+python3 tools/canopen/gen_eds.py docs/canopen/arm.json tools/canopen/template.eds docs/canopen/arm.eds
+# 官方 CANopenEditor CLI（需 .NET；本机用 dotnet-sdk-10.0 + DOTNET_ROLL_FORWARD=Major 跑 net8.0）
+dotnet <CANopenEditor>/EDSSharp/bin/Release/net8.0/EDSSharp.dll \
+       --infile docs/canopen/arm.eds --outfile OD.c --type CanOpenNodeV4
+cp OD.c Core/Src/OD.c; cp OD.h Core/Inc/OD.h
+```
+
+### 门禁与台架验收
+
+```bash
+python3 tools/canopen_gate.py --repo .        # 清单↔EDS↔OD 一致、ODList 升序、PDO 禁用位
+python3 tools/canopen_bringup.py --can can0 --seconds 3 --no-drive   # NMT/SYNC/PDO 速率/SDO
+```
+
+- 心跳应为 `0x702`：上电 `7F`（Pre-operational）→ 主站 NMT Start 后 `05`。
+- TPDO 期望速率：`0x182/0x282` 50 Hz、`0x382` 100 Hz、`0x482` 10 Hz。
+- 桥接可观测量（SDO）：`0x2150 cmd_en`、`0x2151 cmd_age_ms`、`0x2154 joint_fault`、`0x2155 joint_zeroed`。身份：`0x2F00`（build_tag 前 4 字符小端打包）、`0x2F01`（复位原因）。
+- ⚠️ 三个已知坑（未用 PDO 的 COB-ID bit31、RX 过滤器遍历方向、EDS 段落顺序决定 ODList 顺序）
+  已固化在 `gen_eds.py` / `PATCHES.md` / `CANOPEN-V5.md` §7 里，别绕过生成器手改。
+
+### v4 已删除（2026-10-30）
+
+`Core/Src/app_can.c`、`Core/Inc/app_can.h`、`docs/PROTOCOL.md`、`docs/protocol-signals.yaml`、
+`tools/can_check.py` 与 `APP_USE_CANOPEN` 编译开关**全部移除**。本仓只编 CANopen v5，
+没有"编回旧协议"的分支——要回滚请回滚 git 提交。
+`app_canopen.h` 里保留了 `can_init` / `can_rx_task_step` / `can_tx_task_step` / `crc8` 四个
+**历史接口名**，只为让 `main.c` / `freertos.c` 的调用点不必改写，语义已全部是 CANopen。
+
+
+> **CAN 协议已于 2026-10-29 切到 v5（CANopen）** —— 规范件 `docs/CANOPEN-V5.md`，
+> 门禁 `python3 tools/canopen_gate.py`，台架验收 `python3 tools/canopen_bringup.py`。
+> 本文里若仍出现 `can_check.py` / `protocol-signals.yaml` / `PROTOCOL.md` / `can_protocol.h`，
+> 指的是**已删除的历史文件**（2026-10-30 v4 下线），不是可选路径。协议只允许 v5。
+> 当前在板 build_tag：底盘 **R73** / 机械臂 **A14**；Jetson `rak` 侧仍是 v4 主站，
+> 与 v5 板子不兼容，联调暂用上面的 `canopen_bringup.py`（生产主站 = 待办 P3）。
+
+
 > **本仓的 git 仓名是历史遗留的 `vehical_rak_edge_ai`**：2026-10-14 曾把「机械臂板」
 > 重命名成「边缘 AI 推理节点」；**2026-10-28 恢复双板架构**，本仓重新担任
 > **机械臂板 `vehical_rak_arm`** 的角色（CMake 工程名、目标产物、`.ioc` 都叫
@@ -10,8 +58,8 @@
 **不做 IK、不做轨迹规划**（那在 Jetson 的 MoveIt）；本板只做「指令角 → 脉宽」的执行 +
 本地安全兜底（急停锁存、指令断流）。
 
-行为约束看本仓 [`AGENTS.md`](AGENTS.md)；协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-（规范件）+ [`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)（机器可读单一来源）；
+行为约束看本仓 [`AGENTS.md`](AGENTS.md)；协议看 [`docs/CANOPEN-V5.md`](docs/CANOPEN-V5.md)
+（唯一规范件）+ `docs/canopen/arm.json`（对象清单 SSOT）；
 板级真相看 [`docs/BOARD-C30D.md`](docs/BOARD-C30D.md)。**新成员先读 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)**。
 
 ---
@@ -148,13 +196,17 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 
 ## 5. 通信协议
 
-本仓是 C30D CAN 总线上的一个节点，遵循**共享且已冻结**的协议：规范文字见
-[`docs/PROTOCOL.md`](docs/PROTOCOL.md)，机器可读单一来源见
-[`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)。`0x010 SAFETY_CMD` 是**广播安全帧**，
-本板必须响应：`EMERGENCY_STOP`（cmd=4）→ 立即冻结舵机并锁存；`CLEAR_ESTOP`（cmd=5）→ 解锁存。
+本仓是 C30D CAN 总线上的 **node 2**，遵循**唯一生效**的协议：规范文字见
+[`docs/CANOPEN-V5.md`](docs/CANOPEN-V5.md)，对象清单 SSOT 见 `docs/canopen/arm.json`。
 
-**不要自己手写帧表**：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`
-（WIP 已接入 `app_can.c`）；提代码前 `can_check.py` 必须退出码 0。
+- **RPDO**：`0x202` J1..J4 令、`0x302` J5/J6/夹爪、`0x402` `cmd_seq`+`cmd_flags`
+- **TPDO**：`0x182/0x282` 关节回读（50 Hz）、`0x382` IMU（100 Hz）、`0x482` `state/fault/mode/errcnt`（10 Hz）
+- **断流语义与底盘不同**：deadman 失效 → `arm_set_remote(0)`，**关节保持当前位置**。
+  舵机硬件 PWM 自续，"停"对它等于"掉下来"。
+- **CAN 不是急停主路径**：物理急停走硬线断动力。节点侧只做 ≤1 ms 冻结 + EMCY 上报。
+
+**不要自己手写对象表**：改 `docs/canopen/arm.json` → `gen_eds.py` → `.eds` → 官方导出器 → `OD.c/h`；
+提代码前 `python3 tools/canopen_gate.py --repo .` 必须退出码 0。
 
 ---
 

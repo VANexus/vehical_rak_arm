@@ -1,6 +1,29 @@
 /*
  * app_build.c — 固件构建标识（单点定义）
  *
+   * A16（2026-10-30 第二改）：CAN 静默自愈（SLAK 清除 + 100ms 滞留邮箱 ABRQ）——
+ *   台架实录一次"SLAK=1 + 三邮箱滞留 → 总线静默"（CAN-BRINGUP-2026-10-30.md §3.2），
+ *   与底盘 R51 的自愈先例同一思路。
+ * A15（2026-10-30）：**v4 整体下线**——删 `app_can.c/h` 与 `APP_USE_CANOPEN` 开关
+ *   （本板协议只允许 v5 一套）；接口收敛进 `app_canopen.h`（历史接口名保留，
+ *   语义全由 CANopenNode 承担）。行为不变，但"还能编回 v4"这条路不存在了。
+ * A14（2026-10-29）：+ 桥接可观测量（0x2150 cmd_en / 0x2151 cmd_age_ms /
+ *   0x2154 joint_fault）与设备标识 0x2F00 tag_packed / 0x2F01 reset_cause。
+ *   注：CiA 推荐的 0x1008/1009/100A（VISIBLE_STRING）实测触发 HardFault
+ *   （CANopenNode v4 + 本移植层组合，见 docs/CANOPEN-V5.md §7 坑 4），已回退；
+ *   名称/厂商信息暂由 EDS [DeviceInfo] 承担。
+ *
+ * A13（2026-10-29）：**CANopen v5 P1**。27 个厂商对象；RPDO1/2=七轴+夹爪命令、
+ *   RPDO3=命令序号/远程门；TPDO1/2=关节回读、TPDO3=IMU、TPDO4=状态；50 Hz 桥接。
+ *
+ * A12（2026-10-29）：**CANopen v5 P0**。CAN 层换成 CANopenNode v4 + 官方 STM32
+ *   移植层（node 2，1 Mbps，上电 Pre-operational）；v4 app_can.c 经 APP_USE_CANOPEN
+ *   开关保留可回滚。臂帧命令/SRDO 在 P1/P2 接回。
+ *
+ * A11（2026-10-29）：**OLED 驱动回归软 SPI + 推挽输出**。板级文档（BOARD-C30D §3）与
+ *   原理图都是 PD11=DC / PD12=RES / PD13=DATA / PD14=CLK 的 4 线软 SPI；PD11-14 由
+ *   开漏改推挽（.ioc + gpio.c 同步）。A8 起没有 OLED 代码、A10 停在 A8 的屏黑状态。
+ *
  * A10（2026-10-29）：**修复致命启动复位循环**。HAL I2C 每次失败重试阻塞 20 ms 且不喂狗，
  *   探测期 25×2×3×20ms ≈3 s > IWDG 2 s → 板子到不了 scheduler（OLED 全黑、CAN 全哑）。
  *   修法：读前后喂狗、超时 20→5 ms、重试 3→2、探测轮数 25→6。
@@ -52,4 +75,4 @@
  */
 #include "app_build.h"
 
-const char build_tag[] = "A10";
+const char build_tag[] = "A16";

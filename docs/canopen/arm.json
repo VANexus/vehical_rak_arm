@@ -1,0 +1,283 @@
+{
+  "node": "arm",
+  "product": "RAK Arm",
+  "product_number": 2,
+  "vendor_id": 0,
+  "revision": 5,
+  "objects": [
+    {
+      "index": "0x2100",
+      "name": "j1cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo1"
+    },
+    {
+      "index": "0x2101",
+      "name": "j2cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo1"
+    },
+    {
+      "index": "0x2102",
+      "name": "j3cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo1"
+    },
+    {
+      "index": "0x2103",
+      "name": "j4cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo1"
+    },
+    {
+      "index": "0x2104",
+      "name": "j5cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo2"
+    },
+    {
+      "index": "0x2105",
+      "name": "j6cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo2"
+    },
+    {
+      "index": "0x2106",
+      "name": "gripcmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo2"
+    },
+    {
+      "index": "0x2107",
+      "name": "j8cmd",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo2"
+    },
+    {
+      "index": "0x2110",
+      "name": "j1state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo1"
+    },
+    {
+      "index": "0x2111",
+      "name": "j2state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo1"
+    },
+    {
+      "index": "0x2112",
+      "name": "j3state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo1"
+    },
+    {
+      "index": "0x2113",
+      "name": "j4state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo1"
+    },
+    {
+      "index": "0x2114",
+      "name": "j5state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo2"
+    },
+    {
+      "index": "0x2115",
+      "name": "j6state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo2"
+    },
+    {
+      "index": "0x2116",
+      "name": "gripstate",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo2"
+    },
+    {
+      "index": "0x2117",
+      "name": "j8state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo2"
+    },
+    {
+      "index": "0x2120",
+      "name": "imu_gz",
+      "type": "int16",
+      "access": "ro",
+      "pdo": "tpdo3"
+    },
+    {
+      "index": "0x2121",
+      "name": "imu_amag",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo3"
+    },
+    {
+      "index": "0x2122",
+      "name": "imu_evt",
+      "type": "uint8",
+      "access": "ro",
+      "pdo": "tpdo3"
+    },
+    {
+      "index": "0x2123",
+      "name": "imu_age",
+      "type": "uint8",
+      "access": "ro",
+      "pdo": "tpdo3"
+    },
+    {
+      "index": "0x2124",
+      "name": "imu_rsvd",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo3"
+    },
+    {
+      "index": "0x2130",
+      "name": "state",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo4"
+    },
+    {
+      "index": "0x2131",
+      "name": "fault",
+      "type": "uint16",
+      "access": "ro",
+      "pdo": "tpdo4"
+    },
+    {
+      "index": "0x2132",
+      "name": "mode",
+      "type": "uint8",
+      "access": "ro",
+      "pdo": "tpdo4"
+    },
+    {
+      "index": "0x2133",
+      "name": "errcnt",
+      "type": "uint8",
+      "access": "ro",
+      "pdo": "tpdo4"
+    },
+    {
+      "index": "0x2140",
+      "name": "cmd_seq",
+      "type": "uint32",
+      "access": "rw",
+      "pdo": "rpdo3"
+    },
+    {
+      "index": "0x2141",
+      "name": "cmd_flags",
+      "type": "uint16",
+      "access": "rw",
+      "pdo": "rpdo3"
+    },
+    {
+      "index": "0x2150",
+      "name": "cmd_en",
+      "type": "uint8",
+      "access": "ro"
+    },
+    {
+      "index": "0x2151",
+      "name": "cmd_age_ms",
+      "type": "uint16",
+      "access": "ro"
+    },
+    {
+      "index": "0x2154",
+      "name": "joint_fault_bm",
+      "type": "uint8",
+      "access": "ro"
+    },
+    {
+      "index": "0x2155",
+      "name": "joint_zeroed",
+      "type": "uint8",
+      "access": "ro"
+    },
+    {
+      "index": "0x2F00",
+      "name": "tag_packed",
+      "type": "uint32",
+      "access": "ro"
+    },
+    {
+      "index": "0x2F01",
+      "name": "reset_cause",
+      "type": "uint8",
+      "access": "ro"
+    }
+  ],
+  "pdo": {
+    "rpdo1": [
+      "0x2100",
+      "0x2101",
+      "0x2102",
+      "0x2103"
+    ],
+    "rpdo2": [
+      "0x2104",
+      "0x2105",
+      "0x2106",
+      "0x2107"
+    ],
+    "rpdo3": [
+      "0x2140",
+      "0x2141"
+    ],
+    "tpdo1": [
+      "0x2110",
+      "0x2111",
+      "0x2112",
+      "0x2113"
+    ],
+    "tpdo2": [
+      "0x2114",
+      "0x2115",
+      "0x2116",
+      "0x2117"
+    ],
+    "tpdo3": [
+      "0x2120",
+      "0x2121",
+      "0x2122",
+      "0x2123",
+      "0x2124"
+    ],
+    "tpdo4": [
+      "0x2130",
+      "0x2131",
+      "0x2132",
+      "0x2133"
+    ]
+  },
+  "tpdo_types": {
+    "tpdo1": 10,
+    "tpdo2": 10,
+    "tpdo3": 5,
+    "tpdo4": 50
+  }
+}

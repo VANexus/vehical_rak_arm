@@ -12,7 +12,7 @@
 #include "app_can_diag.h"
 #include "app_bench.h"
 #include "app_build.h"
-#include "app_can.h"
+#include "app_canopen.h"
 #include "main.h"
 #include "usart.h"
 #include "cmsis_os.h"
