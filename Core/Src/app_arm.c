@@ -185,6 +185,20 @@ uint16_t arm_axis_deg10(unsigned axis)
     return (uint16_t)(((uint32_t)(us - ARM_PULSE_MIN_US) * 27U) / 20U);
 }
 
+/* [AI] A31：0x2110/0x2111 改 int16 有符号后，J1/J2 回读不再钳 0——
+   之前负角度全被钳成 0，两端边界盲测时诊断全靠猜（CANOPEN-V5 §4 TPDO1）。 */
+int16_t arm_axis_deg10_signed(unsigned axis)
+{
+    if (axis >= ARM_AXIS_COUNT) {
+        return 0;
+    }
+    if (axis < ARM_JOINT_AXIS_COUNT) {
+        return (int16_t)joint_actual_deg10_signed(axis);
+    }
+    /* J3..J6 舵机角域 0..360°，不会为负，直接复用无符号实现 */
+    return (int16_t)arm_axis_deg10(axis);
+}
+
 uint8_t arm_reset_cause(void) { return s_reset_cause; }
 
 uint32_t arm_uptime_s(uint32_t now_ms)

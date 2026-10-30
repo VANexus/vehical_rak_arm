@@ -68,6 +68,10 @@ uint8_t arm_servo_errcnt(void);
    用于 SERVO_STATE 遥测 */
 uint16_t arm_axis_deg10(unsigned axis);
 
+/* [AI] A31：J1/J2 有符号实际角 0.1°（未归零漂移/越过零点时为负），
+   进 0x2110/0x2111 回读（int16）。axis ≥ J1/J2 时退化到无符号实现。 */
+int16_t arm_axis_deg10_signed(unsigned axis);
+
 /* 复位原因（'B'/'I'/'S'/'P'/'-'），OLED 显示用 */
 uint8_t arm_reset_cause(void);
 

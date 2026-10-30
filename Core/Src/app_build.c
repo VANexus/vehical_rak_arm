@@ -1,6 +1,16 @@
 /*
  * app_build.c — 固件构建标识（单点定义）
  *
+ * A31（2026-10-31 凌晨）：**0x2110/0x2111 回读改 int16 有符号**——
+ *   A30 边界测量中止的根因之一：负角度全被钳成 0（arm_axis_deg10 无符号 +
+ *   OD 变量 uint16），回读只能看到 0..360°，越过零点/负方向诊断全靠猜。
+ *   改动：arm.json 0x2110/0x2111 uint16→int16 → arm.eds 重生成（DataType
+ *   0x0006→0x0003）→ OD.h 两成员 int16（OD.c 与符号无关，见其内注释；
+ *   CANopenEditor 暂不可用（GitHub 网络阻断），手工等价修改，Linux 侧
+ *   下次 EDSSharp 重生成比对收口）→ 写入侧 arm_axis_deg10_signed()。
+ *   J1/J2 软限位 kJointLimit* 在有符号回读实测后回填（本批不动）。
+ *   同批修 gen_eds.py Windows CRLF 假失败（write_text → newline="\n"）。
+ *   rak 侧契约（arm.json/eds 副本 + semantics）同批更新。
  * A30（2026-10-31 凌晨）：**kick 斜坡化 + 点动 60% + 边界测量开始**——
  *   A29 实录 J2 破静摩擦用时 ~7s 且"突破即弹射"（齿轮箱在满扭矩下蓄能，
  *   静摩擦释放瞬间整体弹射撞墙，用户目视"撞过头"）。kick 改 30% 起步、
@@ -154,4 +164,4 @@
  */
 #include "app_build.h"
 
-const char build_tag[] = "A30";
+const char build_tag[] = "A31";

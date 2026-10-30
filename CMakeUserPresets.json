@@ -1,0 +1,25 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "win-dbg",
+            "inherits": "Debug",
+            "binaryDir": "${sourceDir}/build/win-dbg"
+        },
+        {
+            "name": "win-rel",
+            "inherits": "Release",
+            "binaryDir": "${sourceDir}/build/win-rel"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "win-dbg",
+            "configurePreset": "win-dbg"
+        },
+        {
+            "name": "win-rel",
+            "configurePreset": "win-rel"
+        }
+    ]
+}

@@ -64,14 +64,14 @@
     {
       "index": "0x2110",
       "name": "j1state",
-      "type": "uint16",
+      "type": "int16",
       "access": "ro",
       "pdo": "tpdo1"
     },
     {
       "index": "0x2111",
       "name": "j2state",
-      "type": "uint16",
+      "type": "int16",
       "access": "ro",
       "pdo": "tpdo1"
     },

@@ -173,10 +173,11 @@ static void render(void)
     display_text(0, 0, row);
     display_text(102, 0, build_tag);
 
-    /* y=10: 六轴实际角（0.1° 取整到度，避免 float printf） */
-    (void)snprintf(row, sizeof(row), "J1%3u J2%3u J3%3u",
-                   (unsigned)(arm_axis_deg10(0U) / 10U),
-                   (unsigned)(arm_axis_deg10(1U) / 10U),
+    /* y=10: 六轴实际角（0.1° 取整到度，避免 float printf）
+       [AI] A31：J1/J2 改有符号显示（回读改 int16 后负角度要能看出来） */
+    (void)snprintf(row, sizeof(row), "J1%3d J2%3d J3%3u",
+                   (int)(arm_axis_deg10_signed(0U) / 10),
+                   (int)(arm_axis_deg10_signed(1U) / 10),
                    (unsigned)(arm_axis_deg10(2U) / 10U));
     display_text(0, 10, row);
     (void)snprintf(row, sizeof(row), "J4%3u J5%3u J6%3u",

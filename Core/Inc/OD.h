@@ -237,8 +237,11 @@ typedef struct {
     uint16_t x2105_J6cmd;
     uint16_t x2106_gripcmd;
     uint16_t x2107_J8cmd;
-    uint16_t x2110_J1state;
-    uint16_t x2111_J2state;
+    int16_t x2110_J1state;   /* [AI] A31：有符号（负角度回读）。CANopenEditor 对同长度
+                                 int16/uint16 生成的 OD.c 逐字节相同（ODA_MB +
+                                 dataLength=2 与符号无关）——本改动与官方导出器等价，
+                                 Linux 侧下次跑 EDSSharp 重生成比对收口 */
+    int16_t x2111_J2state;   /* [AI] A31：同上 */
     uint16_t x2112_J3state;
     uint16_t x2113_J4state;
     uint16_t x2114_J5state;

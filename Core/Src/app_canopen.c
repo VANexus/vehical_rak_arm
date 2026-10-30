@@ -191,9 +191,10 @@ void app_canopen_step(uint32_t now_ms)
         arm_note_cmd_rx(now_ms);
     }
 
-    /* 反馈：J1..J6 实际角；夹爪/第 8 轴本板无硬件，回 0 */
-    OD_RAM.x2110_J1state = arm_axis_deg10(0U);
-    OD_RAM.x2111_J2state = arm_axis_deg10(1U);
+    /* 反馈：J1..J6 实际角；夹爪/第 8 轴本板无硬件，回 0
+       [AI] A31：J1/J2 改有符号回读（0x2110/0x2111 = int16，负角度不再钳 0） */
+    OD_RAM.x2110_J1state = arm_axis_deg10_signed(0U);
+    OD_RAM.x2111_J2state = arm_axis_deg10_signed(1U);
     OD_RAM.x2112_J3state = arm_axis_deg10(2U);
     OD_RAM.x2113_J4state = arm_axis_deg10(3U);
     OD_RAM.x2114_J5state = arm_axis_deg10(4U);
