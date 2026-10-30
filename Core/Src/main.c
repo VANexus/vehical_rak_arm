@@ -31,7 +31,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_arm.h"
-#include "app_can.h"
+#include "app_canopen.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

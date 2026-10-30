@@ -29,7 +29,7 @@
 #include "app_arm.h"
 #include "app_bench.h"
 #include "app_buzz.h"
-#include "app_can.h"
+#include "app_canopen.h"
 #include "app_canopen.h"
 #include "app_can_diag.h"
 #include "app_imu.h"

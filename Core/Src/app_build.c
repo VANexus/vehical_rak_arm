@@ -1,6 +1,12 @@
 /*
  * app_build.c — 固件构建标识（单点定义）
  *
+   * A16（2026-10-30 第二改）：CAN 静默自愈（SLAK 清除 + 100ms 滞留邮箱 ABRQ）——
+ *   台架实录一次"SLAK=1 + 三邮箱滞留 → 总线静默"（CAN-BRINGUP-2026-10-30.md §3.2），
+ *   与底盘 R51 的自愈先例同一思路。
+ * A15（2026-10-30）：**v4 整体下线**——删 `app_can.c/h` 与 `APP_USE_CANOPEN` 开关
+ *   （本板协议只允许 v5 一套）；接口收敛进 `app_canopen.h`（历史接口名保留，
+ *   语义全由 CANopenNode 承担）。行为不变，但"还能编回 v4"这条路不存在了。
  * A14（2026-10-29）：+ 桥接可观测量（0x2150 cmd_en / 0x2151 cmd_age_ms /
  *   0x2154 joint_fault）与设备标识 0x2F00 tag_packed / 0x2F01 reset_cause。
  *   注：CiA 推荐的 0x1008/1009/100A（VISIBLE_STRING）实测触发 HardFault
@@ -69,4 +75,4 @@
  */
 #include "app_build.h"
 
-const char build_tag[] = "A14";
+const char build_tag[] = "A16";

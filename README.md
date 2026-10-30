@@ -31,16 +31,19 @@ python3 tools/canopen_bringup.py --can can0 --seconds 3 --no-drive   # NMT/SYNC/
 - ⚠️ 三个已知坑（未用 PDO 的 COB-ID bit31、RX 过滤器遍历方向、EDS 段落顺序决定 ODList 顺序）
   已固化在 `gen_eds.py` / `PATCHES.md` / `CANOPEN-V5.md` §7 里，别绕过生成器手改。
 
-### 回滚到 v4
+### v4 已删除（2026-10-30）
 
-`cmake --preset Debug -DAPP_USE_CANOPEN=OFF`（v4 的 `Core/Src/app_can.c`、`docs/PROTOCOL.md`、
-`tools/can_check.py` 都还在）。**同一总线禁止混跑 v4/v5**：ID 直接冲突，整套一起换。
+`Core/Src/app_can.c`、`Core/Inc/app_can.h`、`docs/PROTOCOL.md`、`docs/protocol-signals.yaml`、
+`tools/can_check.py` 与 `APP_USE_CANOPEN` 编译开关**全部移除**。本仓只编 CANopen v5，
+没有"编回旧协议"的分支——要回滚请回滚 git 提交。
+`app_canopen.h` 里保留了 `can_init` / `can_rx_task_step` / `can_tx_task_step` / `crc8` 四个
+**历史接口名**，只为让 `main.c` / `freertos.c` 的调用点不必改写，语义已全部是 CANopen。
 
 
 > **CAN 协议已于 2026-10-29 切到 v5（CANopen）** —— 规范件 `docs/CANOPEN-V5.md`，
 > 门禁 `python3 tools/canopen_gate.py`，台架验收 `python3 tools/canopen_bringup.py`。
-> 本文里凡提到 `can_check.py` / `protocol-signals.yaml` / `PROTOCOL.md`(v4) / `can_protocol.h`
-> 的条目**只适用于 v4 回滚分支**（`cmake -DAPP_USE_CANOPEN=OFF`）。
+> 本文里若仍出现 `can_check.py` / `protocol-signals.yaml` / `PROTOCOL.md` / `can_protocol.h`，
+> 指的是**已删除的历史文件**（2026-10-30 v4 下线），不是可选路径。协议只允许 v5。
 > 当前在板 build_tag：底盘 **R73** / 机械臂 **A14**；Jetson `rak` 侧仍是 v4 主站，
 > 与 v5 板子不兼容，联调暂用上面的 `canopen_bringup.py`（生产主站 = 待办 P3）。
 
@@ -55,8 +58,8 @@ python3 tools/canopen_bringup.py --can can0 --seconds 3 --no-drive   # NMT/SYNC/
 **不做 IK、不做轨迹规划**（那在 Jetson 的 MoveIt）；本板只做「指令角 → 脉宽」的执行 +
 本地安全兜底（急停锁存、指令断流）。
 
-行为约束看本仓 [`AGENTS.md`](AGENTS.md)；协议看 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-（规范件）+ [`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)（机器可读单一来源）；
+行为约束看本仓 [`AGENTS.md`](AGENTS.md)；协议看 [`docs/CANOPEN-V5.md`](docs/CANOPEN-V5.md)
+（唯一规范件）+ `docs/canopen/arm.json`（对象清单 SSOT）；
 板级真相看 [`docs/BOARD-C30D.md`](docs/BOARD-C30D.md)。**新成员先读 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)**。
 
 ---
@@ -193,13 +196,17 @@ STM32_Programmer_CLI -c port=SWD mode=UR freq=100 -w build/Debug/vehical_rak_arm
 
 ## 5. 通信协议
 
-本仓是 C30D CAN 总线上的一个节点，遵循**共享且已冻结**的协议：规范文字见
-[`docs/PROTOCOL.md`](docs/PROTOCOL.md)，机器可读单一来源见
-[`docs/protocol-signals.yaml`](docs/protocol-signals.yaml)。`0x010 SAFETY_CMD` 是**广播安全帧**，
-本板必须响应：`EMERGENCY_STOP`（cmd=4）→ 立即冻结舵机并锁存；`CLEAR_ESTOP`（cmd=5）→ 解锁存。
+本仓是 C30D CAN 总线上的 **node 2**，遵循**唯一生效**的协议：规范文字见
+[`docs/CANOPEN-V5.md`](docs/CANOPEN-V5.md)，对象清单 SSOT 见 `docs/canopen/arm.json`。
 
-**不要自己手写帧表**：`python3 tools/can_check.py --c-header` 生成 `docs/gen/can_protocol.h`
-（WIP 已接入 `app_can.c`）；提代码前 `can_check.py` 必须退出码 0。
+- **RPDO**：`0x202` J1..J4 令、`0x302` J5/J6/夹爪、`0x402` `cmd_seq`+`cmd_flags`
+- **TPDO**：`0x182/0x282` 关节回读（50 Hz）、`0x382` IMU（100 Hz）、`0x482` `state/fault/mode/errcnt`（10 Hz）
+- **断流语义与底盘不同**：deadman 失效 → `arm_set_remote(0)`，**关节保持当前位置**。
+  舵机硬件 PWM 自续，"停"对它等于"掉下来"。
+- **CAN 不是急停主路径**：物理急停走硬线断动力。节点侧只做 ≤1 ms 冻结 + EMCY 上报。
+
+**不要自己手写对象表**：改 `docs/canopen/arm.json` → `gen_eds.py` → `.eds` → 官方导出器 → `OD.c/h`；
+提代码前 `python3 tools/canopen_gate.py --repo .` 必须退出码 0。
 
 ---
 
