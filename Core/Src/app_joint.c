@@ -33,12 +33,14 @@
         机械臂板不驱动轮子，四路电机口都空闲 —— 只用 A/B 两路。
         ⚠️ 极性 kJointSign 仍是 [AI] 待实测：反了就是**正反馈飞车**，
            首版上板必须先做极性确认（README §7），确认后再改这里。 */
-static const uint8_t kJointMotorCh[JOINT_COUNT] = { 0U, 1U };   /* {J1, J2} → A, B */
+static const uint8_t kJointMotorCh[JOINT_COUNT] = { 0U, 1U };   /* [AI] A27：J1→A、J2→B 恢复（A26 的 C 口裁决被 R75 同板对照取代——硬件无问题，根因是驱动方法，见 app_build.c A27） */
 static const uint8_t kJointEncIdx[JOINT_COUNT]  = { 0U, 1U };   /* {J1, J2} → TIM2, TIM3 */
 
-/* 电机出力方向 ↔ 关节角增大方向（+1 / -1）。[AI] 待实测：反了就是**正反馈飞车**，
-   首版上板必须先做极性确认（README §7），确认后再改这里。 */
-static const int8_t  kJointSign[JOINT_COUNT]    = { 1, 1 };
+/* 电机出力方向 ↔ 关节角增大方向（+1 / -1）。
+   [AI] A23（2026-10-31 用户手动实测确认）：两轴都反——零位保持下手动掰关节，
+   感到电机力**顺着**手的方向（正反馈手感）→ kJointSign {1,1}→{-1,-1}。
+   若翻转后某轴出现"反向跑飞"，跟随误差闸门（30°）+ 堵转判定会立即锁 FAULT。 */
+static const int8_t  kJointSign[JOINT_COUNT]    = { -1, -1 };
 
 /* ---- 换算常数（一个物理量只允许一个常数） ---- */
 #define JOINT_CNT_PER_DEG10_X100  1707U   /* counts per 0.1° × 100 = 61440/3600×100 */
@@ -71,17 +73,23 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_STALL_DUTY_Q   1500L   /* ≥15% 占空比才判：低于此不足以顶住机械限位 */
 #define JOINT_STALL_WIN_MS    100U   /* 判速窗口 */
 #define JOINT_STALL_CPM100     30L   /* 每 100 ms 位移下限（counts） */
-#define JOINT_STALL_WINS        4U   /* 连续窗口数（A19：200ms→400ms，给静摩擦突破留时间） */
+#define JOINT_STALL_WINS        10U   /* 连续窗口数（A24：400ms→1s——用户台架实录两轴都
+                                         "初始给点力才开始转"，静摩擦突破需要时间；
+                                         位置环满占空比 1s 零位移再判顶住，仍能兜住真堵转） */
 
 /* ---- 台架点动（A6）---- */
-#define JOINT_JOG_DUTY_DEF   2500L   /* 默认 25%：慢速，撞上也是轻碰 */
+#define JOINT_JOG_DUTY_DEF   6000L   /* A30：25%→60%。默认 25% 破不了静摩擦（台架
+                                        实录点动探墙推不动），60% = 点动上限 */
 #define JOINT_JOG_DUTY_MIN    500L   /* 5% */
 #define JOINT_JOG_DUTY_MAX   6000L   /* 60%：再高就不算"慢速探测"了 */
 #define JOINT_JOG_MS_DEF     1200U   /* 单次点动 1.2 s，到点自动刹 */
 #define JOINT_JOG_MS_MAX     3000U   /* 连续按键可续到 3 s（仍不是"按住不停"） */
 
 /* ---- 位置环（1 kHz 定点；[AI] 未上板整定的初值，首版上板必须重标） ---- */
-#define JOINT_KP_NUM    10L      /* 单位误差 → 0.01% 占空比：100 counts(0.59°) → 10% */
+#define JOINT_KP_NUM     3L      /* 单位误差 → 0.01% 占空比（A28：10→3。10 时 5° 误差
+                                    = 85% duty，破静摩擦瞬间直接打满→炮弹式过冲到
+                                    30° 故障闸门。3 时 5°→25%、30°→76%，重力稳态
+                                    靠积分补） */
 #define JOINT_KP_DEN     1L
 #define JOINT_KI_NUM     1L      /* 单位误差·ms → 0.01%：100 counts 持续 1 s → 20% */
 #define JOINT_KI_DEN    50L
@@ -96,6 +104,26 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
                                     JOINT_ERR_FAULT 只拦**真的跟不上/飞车**，不误报正常大位移。
                                     若某轴物理速度低于 35°/s 出现误报，改小本常数。 */
 #define JOINT_ERR_FAULT 5120L    /* 跟随误差（对**斜坡后目标**）>30° 判 FAULT（防飞车闸门） */
+
+/* ---- A27：静摩擦突破前馈（对标底盘 R33 判向 kick 的"持续到突破"语义） ----
+   台架实录（A25-A26 + R75 同板对照）：同板同口同电机，底盘代码能转、
+   臂板代码不能——差异 = 底盘 kick 是**开环 75% 持续输出直到编码器看到运动**，
+   臂板 A25 kick 只打 150ms 就交 PI，1s 堵转窗口跟着锁故障。
+   修正：kick 持续满扭矩，直到位移 ≥JOINT_BREAKAWAY_MOVED（突破，PI 接管）
+   或 JOINT_BREAKAWAY_MS_MAX（真堵转上限，之后堵转判定接管锁 FAULT）。
+   kick 期间冻结堵转窗口计数。 */
+#define JOINT_BREAKAWAY_ERR    350L    /* 误差 ≥2°（350 counts）才 kick，小修正不打 */
+/* [AI] A30：kick 斜坡——30% 起步、每秒 +10%、封顶 95%。静摩擦在尽可能低的
+   占空比下被突破（最小齿轮箱预紧 = 最温和弹射），突破用时不确定也没关系
+   （斜坡会一直爬到 95%）。 */
+#define JOINT_BREAKAWAY_DUTY0 3000L    /* kick 起始 30% */
+#define JOINT_BREAKAWAY_RAMP    1L    /* 每 ms +0.01%（= +10%/s） */
+#define JOINT_BREAKAWAY_DUTY_MAX 9500L /* kick 封顶 95% */
+#define JOINT_BREAKAWAY_MS_MAX 8000U   /* kick 最长 8s（A29：3s 不够——A27 实测突破
+                                          用时 ~4s 且逐次漂移；底盘判向 kick 无上限，
+                                          8s + 1s 堵转已保守） */
+#define JOINT_BREAKAWAY_MOVED   100L   /* 位移 ≥100 counts（0.6°）= 已突破 */
+#define JOINT_HANDOFF_DUTY    3000L    /* A28：突破交棒占空比 30%（对标底盘 50% hand-off，臂更轻） */
 
 /* ---- 节拍 ---- */
 #define JOINT_WIN_TICKS          25U       /* 25 kHz ÷ 25 = 1 kHz 控制节拍 */
@@ -116,6 +144,8 @@ static volatile int32_t s_target_counts[JOINT_COUNT]; /* 目标（原始计数�
 static int32_t s_integral[JOINT_COUNT];
 static int32_t s_duty_q[JOINT_COUNT];
 static int32_t s_tgt_slew[JOINT_COUNT];   /* 斜坡后的目标（调节器真正的设定点） */
+static volatile uint16_t s_kick_ms[JOINT_COUNT];   /* A27 剩余 kick 预算 */
+static int32_t s_kick_pos0[JOINT_COUNT];           /* A27 kick 起点位移 */
 
 /* 门 / 状态 */
 static volatile uint8_t s_estop;
@@ -194,7 +224,10 @@ static void joint_apply(unsigned axis, int32_t duty_q)
     if (kJointSign[axis] < 0) dir = -dir;
     unsigned pct = (unsigned)(mag / 100L);
     if (pct == 0U) { joint_brake(axis); return; }   /* 不足 1% 一律刹车，不留滑行 */
-    if (pct > 85U) pct = 85U;                       /* JOINT_DUTY_LIM 同口径双保险 */
+    if (pct > 95U) pct = 95U;                       /* [AI] A24：85→95 对齐 JOINT_DUTY_LIM——
+                                                       A19 提限到 95% 但被本钳位截回 85%，
+                                                       95% 上限从未真正生效（台架"85% 零位移"
+                                                       实测的正是这个被截断的值） */
     uint32_t pulse = (s_pwm_arr + 1U) * pct / 100U;
     if (dir > 0) joint_pair(kJointMotorCh[axis], pulse, 0U);
     else         joint_pair(kJointMotorCh[axis], 0U, pulse);
@@ -329,6 +362,7 @@ void joint_init(void)
         s_jog_duty_q[a] = 0;
         s_jog_dir[a] = 0;
         s_jog_ms[a] = 0U;
+        s_kick_ms[a] = 0U;   /* A25 */
         s_collide[a] = 0U;
         s_pos_prev_1k[a] = 0;
         s_move_acc[a] = 0;
@@ -524,6 +558,7 @@ static void joint_zero_apply(void)
         s_tgt_slew[a] = s_pos_counts[a];
         s_integral[a] = 0;
         s_duty_q[a] = 0;
+        s_kick_ms[a] = 0U;   /* A25 */
         s_fault[a] = 0U;
         joint_brake(a);
         /* [AI] A6：置零同时取消点动/碰撞记录（置零是人主动定义基准位） */
@@ -543,6 +578,7 @@ static void joint_fault_clear_apply(void)
             s_fault[a] = 0U;
             s_integral[a] = 0;
             s_duty_q[a] = 0;
+            s_kick_ms[a] = 0U;   /* A25 */
             s_target_counts[a] = s_pos_counts[a];
             s_tgt_slew[a] = s_pos_counts[a];   /* 斜坡从当前位置重新起步 */
             s_still_wins[a] = 0U;
@@ -692,6 +728,46 @@ void joint_isr(void)
         if (pe > JOINT_DEADBAND) pe -= JOINT_DEADBAND;
         else if (pe < -JOINT_DEADBAND) pe += JOINT_DEADBAND;
         else pe = 0L;
+
+        /* [AI] A27：静摩擦突破 kick —— 从静止起步且误差超阈值时开环满扭矩
+           **持续输出直到突破**（底盘 R33 同语义），位移达标即交 PI；
+           kick 期间冻结堵转窗口计数（否则 1s 就被误判顶住）。 */
+        if (s_kick_ms[a] != 0U) {
+            s_kick_ms[a]--;
+            int32_t moved = s_pos_counts[a] - s_kick_pos0[a];
+            if (moved < 0L) moved = -moved;
+            if (moved >= JOINT_BREAKAWAY_MOVED || pe == 0L) {
+                /* A28：突破瞬间降速交棒——带着 95% 交接会炮弹式过冲（台架实录
+                   J2 冲到 76.5° 撞 30° 故障闸门）。降到 30% + 清掉 kick 期间
+                   充爆的积分器，让 PI 从温和起点接管。 */
+                s_kick_ms[a] = 0U;
+                if (s_duty_q[a] > JOINT_HANDOFF_DUTY)      s_duty_q[a] = JOINT_HANDOFF_DUTY;
+                else if (s_duty_q[a] < -JOINT_HANDOFF_DUTY) s_duty_q[a] = -JOINT_HANDOFF_DUTY;
+                s_integral[a] = 0;
+            } else {
+                s_still_wins[a] = 0U;
+                s_move_acc[a] = 0L;
+                s_win_ms[a] = 0U;
+                s_pos_prev_1k[a] = s_pos_counts[a];
+                int32_t elapsed = (int32_t)(JOINT_BREAKAWAY_MS_MAX - s_kick_ms[a]);
+                int32_t kick = (err > 0L ? 1L : -1L) *
+                               (JOINT_BREAKAWAY_DUTY0 + elapsed * JOINT_BREAKAWAY_RAMP);
+                if (kick > JOINT_BREAKAWAY_DUTY_MAX)  kick = JOINT_BREAKAWAY_DUTY_MAX;
+                if (kick < -JOINT_BREAKAWAY_DUTY_MAX) kick = -JOINT_BREAKAWAY_DUTY_MAX;
+                int32_t kdq = kick - s_duty_q[a];
+                if (kdq > JOINT_SLEW_Q) kdq = JOINT_SLEW_Q;
+                else if (kdq < -JOINT_SLEW_Q) kdq = -JOINT_SLEW_Q;
+                s_duty_q[a] += kdq;
+                joint_apply(a, s_duty_q[a]);
+                continue;
+            }
+        }
+        if (s_duty_q[a] == 0L &&
+            (pe > JOINT_BREAKAWAY_ERR || pe < -JOINT_BREAKAWAY_ERR)) {
+            s_kick_ms[a] = JOINT_BREAKAWAY_MS_MAX;
+            s_kick_pos0[a] = s_pos_counts[a];
+            continue;   /* 下一拍起按 kick 通道输出 */
+        }
 
         if (pe != 0L) {
             s_integral[a] += pe;
