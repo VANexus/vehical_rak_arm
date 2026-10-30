@@ -80,9 +80,9 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_STALL_DUTY_Q   1500L   /* ≥15% 占空比才判：低于此不足以顶住机械限位 */
 #define JOINT_STALL_WIN_MS    100U   /* 判速窗口 */
 #define JOINT_STALL_CPM100     30L   /* 每 100 ms 位移下限（counts） */
-#define JOINT_STALL_WINS        10U   /* 连续窗口数（A24：400ms→1s——用户台架实录两轴都
-                                         "初始给点力才开始转"，静摩擦突破需要时间；
-                                         位置环满占空比 1s 零位移再判顶住，仍能兜住真堵转） */
+#define JOINT_STALL_WINS        30U   /* 连续窗口数（A24：400ms→1s；A33：1s→3s——
+                                         重触发 100ms 内接管，闸门只兜"贴目标研磨"
+                                         型真堵转，避免与重触发赛跑误锁） */
 
 /* ---- 台架点动（A6）---- */
 #define JOINT_JOG_DUTY_DEF   6000L   /* A30：25%→60%。默认 25% 破不了静摩擦（台架
@@ -93,10 +93,13 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_JOG_MS_MAX     3000U   /* 连续按键可续到 3 s（仍不是"按住不停"） */
 
 /* ---- 位置环（1 kHz 定点；[AI] 未上板整定的初值，首版上板必须重标） ---- */
-#define JOINT_KP_NUM     3L      /* 单位误差 → 0.01% 占空比（A28：10→3。10 时 5° 误差
-                                    = 85% duty，破静摩擦瞬间直接打满→炮弹式过冲到
-                                    30° 故障闸门。3 时 5°→25%、30°→76%，重力稳态
-                                    靠积分补） */
+#define JOINT_KP_NUM    10L      /* 单位误差 → 0.01% 占空比（[AI] A33 台架实测改回 10：
+                                    A28 降 3 是因为旧 TGT_SLEW=1000 实效无斜坡、err 全量，
+                                    KP=10 即炮弹；A33 真斜坡把跟踪期 err 钉在 ~2°，
+                                    KP=10 → 2° 误差 34% 占空比，足以越过动摩擦维持
+                                    运动（SWD 实测 kick 在 ~56% 才破静摩擦，交棒后
+                                    KP=3 只有 ~7% + 积分，立刻再粘死 → 0.2°/s 粘滑
+                                    爬行，22s 只走 0.18°，实录）。 */
 #define JOINT_KP_DEN     1L
 #define JOINT_KI_NUM     1L      /* 单位误差·ms → 0.01%：100 counts 持续 1 s → 20% */
 #define JOINT_KI_DEN    50L
@@ -105,11 +108,17 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_DUTY_LIM  9500L    /* 0.01% → 95%（A19：85%→95%。台架实录 J1 静摩擦下
                                     85% 零位移；底盘 R 系列起步静摩擦 ~75% 转述，
                                     臂减速箱更沉。95% + 堵转窗口 400ms 兜底） */
+#define JOINT_DUTY_FLOOR 3500L   /* [AI] A33：滑行维持地板 35%，但**只在 |pe|>3° 时生效**
+                                    （远离目标才强制推；近目标交给 KP 斜降，避免对
+                                    静止关节 35% 硬研磨 → 堵转误锁）。停滞由重触发
+                                    接管（100ms），堵转闸门只兜贴目标研磨的真堵转 */
 #define JOINT_SLEW_Q    2000L    /* 每 1 ms 允许的占空比变化（0.01%）→ 20%/ms 斜坡 */
-#define JOINT_TGT_SLEW  1000L    /* 目标斜坡：每 1 ms 最多 1000 counts ≈ 35°/s（[AI] 待整定）
-                                    作用：把"指令大跳变"变成受控斜坡，从而让下面的
-                                    JOINT_ERR_FAULT 只拦**真的跟不上/飞车**，不误报正常大位移。
-                                    若某轴物理速度低于 35°/s 出现误报，改小本常数。 */
+/* [AI] A33：每 1 kHz 拍最多 6 counts ≈ 35°/s（35°/s × 170.7 counts/° ÷ 1000 ≈ 5.98）。
+   ⚠️ 旧值 1000 的注释"≈35°/s"算错了 170 倍——1000 counts/ms ≈ 58°/ms，等效于
+   **没有斜坡**：大步长指令 err 瞬间全量，kick 破静摩擦的瞬间 PI 对全量误差直接
+   拉满 95% → 炮弹式过冲（A32 台架实录 0→30° 冲到 61.1°、随后卡死在
+   斜坡/故障闸门互锁里）。 */
+#define JOINT_TGT_SLEW     6L
 #define JOINT_ERR_FAULT 5120L    /* 跟随误差（对**斜坡后目标**）>30° 判 FAULT（防飞车闸门） */
 
 /* ---- A27：静摩擦突破前馈（对标底盘 R33 判向 kick 的"持续到突破"语义） ----
@@ -120,12 +129,18 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
    或 JOINT_BREAKAWAY_MS_MAX（真堵转上限，之后堵转判定接管锁 FAULT）。
    kick 期间冻结堵转窗口计数。 */
 #define JOINT_BREAKAWAY_ERR    350L    /* 误差 ≥2°（350 counts）才 kick，小修正不打 */
-/* [AI] A30：kick 斜坡——30% 起步、每秒 +10%、封顶 95%。静摩擦在尽可能低的
-   占空比下被突破（最小齿轮箱预紧 = 最温和弹射），突破用时不确定也没关系
-   （斜坡会一直爬到 95%）。 */
+/* [AI] A33 台架实测（SWD 读 s_duty_q 佐证）：旧 ramp 1%/ms 要 2.6s 才爬到实测
+   破摩擦点 ~56%——而点动是 3ms 内到 60% 立即破摩擦（0.15s 走 12.8°）。
+   改快斜坡 + 封顶在点动实证值 60%：0.3s 内到 60%，破摩擦 <0.5s/次。
+   （A29 的"炮弹"根因是旧无斜坡下 err 全量 + 交棒后 PI 95%，A33 真斜坡下
+   kick 期 err 钉在 ~2°，不存在炮弹路径。） */
 #define JOINT_BREAKAWAY_DUTY0 3000L    /* kick 起始 30% */
-#define JOINT_BREAKAWAY_RAMP    1L    /* 每 ms +0.01%（= +10%/s） */
-#define JOINT_BREAKAWAY_DUTY_MAX 9500L /* kick 封顶 95% */
+#define JOINT_BREAKAWAY_RAMP  100L    /* 每 ms +1%（= +100%/s）→ 0.3s 到 60% */
+#define JOINT_BREAKAWAY_DUTY_MAX 9500L /* kick 封顶 95%（[AI] A33 台架复测：60% 只够
+                                          顺重力方向破摩擦（点动 0.15s/12.8° 是 downhill
+                                          数据）——逆重力方向 60% kick 永远破不了，只能
+                                          等堵转闸门（v7 实录 30° 回程卡死）。A19 早在
+                                          J1 上实测过 85% 都不够，恢复 95% + 快 ramp） */
 #define JOINT_BREAKAWAY_MS_MAX 8000U   /* kick 最长 8s（A29：3s 不够——A27 实测突破
                                           用时 ~4s 且逐次漂移；底盘判向 kick 无上限，
                                           8s + 1s 堵转已保守） */
@@ -300,8 +315,18 @@ static void joint_track_motion(unsigned a)
     uint8_t still = (s_move_acc[a] < JOINT_STALL_CPM100) ? 1U : 0U;
     s_move_acc[a] = 0L;
     s_win_ms[a] = 0U;
+    /* [AI] A33 关键修复：still 窗口只在**真的在驱动**（|duty|≥15%）时累计——
+       旧代码静置时无条件累加到饱和（255），任何位置指令让 duty 一过 15% 就在
+       同一拍被判"堵转"锁 FAULT（SWD 实录：指令开始后 slew 只走 18 counts 即
+       全冻结）。这也是"清障后第一小步能动、之后全死"的根因。 */
     if (still != 0U) {
-        if (s_still_wins[a] < 255U) s_still_wins[a]++;
+        int32_t dq = s_duty_q[a];
+        if (dq < 0L) dq = -dq;
+        if (dq >= JOINT_STALL_DUTY_Q) {
+            if (s_still_wins[a] < 255U) s_still_wins[a]++;
+        } else {
+            s_still_wins[a] = 0U;
+        }
     } else {
         s_still_wins[a] = 0U;
     }
@@ -693,8 +718,13 @@ void joint_isr(void)
             continue;
         }
 
-        /* 目标斜坡：把指令跳变变成受控位移，保护机械 + 让防飞车闸门不误报 */
-        {
+        /* 目标斜坡：把指令跳变变成受控位移，保护机械 + 让防飞车闸门不误报。
+           [AI] A33：kick 期间**冻结**斜坡——kick 在等破静摩擦时若斜坡独自走远，
+           跟随误差会拉到全量程，破摩擦瞬间 PI 对全量 err 直接 95%（炮弹式过冲，
+           A32 台架实录）。冻结后 err 封顶在重 kick 阈值（2°）附近，破摩擦交给
+           kick；突破后保留冻结值（≈起点+2°），PI 靠残余误差的积分推力继续走
+           （见 handoff 分支注释——重同步到当前位置的方案已台架否决）。 */
+        if (s_kick_ms[a] == 0U) {
             int32_t ds = s_target_counts[a] - s_tgt_slew[a];
             if (ds > JOINT_TGT_SLEW) ds = JOINT_TGT_SLEW;
             else if (ds < -JOINT_TGT_SLEW) ds = -JOINT_TGT_SLEW;
@@ -702,7 +732,11 @@ void joint_isr(void)
         }
 
         int32_t err = s_tgt_slew[a] - s_pos_counts[a];
-        if (err > JOINT_ERR_FAULT || err < -JOINT_ERR_FAULT) {
+        /* [AI] A33：kick 期间跳过跟随误差闸门——斜坡冻结时 err 就是全量步长，
+           大步长指令必然瞬时超 30°；kick 自身有 8s 上限 + 突破即交棒，窗口有界。
+           kick 超时仍未突破 → 落回本闸门，PI 拉满 + 堵转判定 1s 内锁 FAULT（真堵转）。 */
+        if (s_kick_ms[a] == 0U &&
+            (err > JOINT_ERR_FAULT || err < -JOINT_ERR_FAULT)) {
             s_fault[a] = 1U;                      /* 防飞车闸门 */
             joint_brake(a);
             s_duty_q[a] = 0;
@@ -743,13 +777,13 @@ void joint_isr(void)
             s_kick_ms[a]--;
             int32_t moved = s_pos_counts[a] - s_kick_pos0[a];
             if (moved < 0L) moved = -moved;
-            if (moved >= JOINT_BREAKAWAY_MOVED || pe == 0L) {
-                /* A28：突破瞬间降速交棒——带着 95% 交接会炮弹式过冲（台架实录
-                   J2 冲到 76.5° 撞 30° 故障闸门）。降到 30% + 清掉 kick 期间
-                   充爆的积分器，让 PI 从温和起点接管。 */
+            if (moved >= JOINT_BREAKAWAY_MOVED || pe <= 0L) {
+                /* [AI] A33：突破/追平即**刹车交 PI**——旧交棒钳 30% 低于动摩擦，
+                   滑行立即衰减再粘死；直接 duty=0 让 PI 从零起调（近目标 pe 小，
+                   KP 自然斜降），停滞由重触发（100ms）接管继续推。 */
                 s_kick_ms[a] = 0U;
-                if (s_duty_q[a] > JOINT_HANDOFF_DUTY)      s_duty_q[a] = JOINT_HANDOFF_DUTY;
-                else if (s_duty_q[a] < -JOINT_HANDOFF_DUTY) s_duty_q[a] = -JOINT_HANDOFF_DUTY;
+                s_duty_q[a] = 0;
+                joint_brake(a);
                 s_integral[a] = 0;
             } else {
                 s_still_wins[a] = 0U;
@@ -769,10 +803,28 @@ void joint_isr(void)
                 continue;
             }
         }
-        if (s_duty_q[a] == 0L &&
-            (pe > JOINT_BREAKAWAY_ERR || pe < -JOINT_BREAKAWAY_ERR)) {
+        /* [AI] A33：重触发 = "从静止（|duty|<30%）" 或 "驱动下停滞 ≥1 窗（100ms）"，
+           且误差 >0.6°（100 counts）。两个比 A6 的 1s 堵转闸门**更早**的保护：
+           爬行速度低于堵转判据的 1.8°/s 下限时（A6 注释预警过的盲区），由重
+           触发接管，闸门永远轮不到开火。误差阈值从 2° 降到 0.6°：交棒后残余
+           误差 ~1.4° 立即满足，粘滑循环无死等窗口。 */
+        if (((s_duty_q[a] < JOINT_BREAKAWAY_DUTY0 && s_duty_q[a] > -JOINT_BREAKAWAY_DUTY0) ||
+             s_still_wins[a] >= 1U) &&
+            (pe > 100L || pe < -100L)) {
             s_kick_ms[a] = JOINT_BREAKAWAY_MS_MAX;
             s_kick_pos0[a] = s_pos_counts[a];
+            /* [AI] A33：fire 时把斜坡重同步到 pos+min(剩余, 6°) 前导——本关节
+               实测物理 = 大静摩擦(~56% duty) + 低动摩擦 + 大滑行惯性（点动
+               0.15s/12.8°），正确节奏是"破摩擦后一次滑行吃掉一段"而不是
+               0.6°/次的爬行（2° 冻结前导版实测 22s 只走 0.5°）。滑行冲过头
+               由 pe≤0 退出 + 地板反向 + 下一次反向 kick 收敛，且前导最多
+               6°、始终短于真实目标，不存在向目标以外的过冲。 */
+            {
+                int32_t lead = s_target_counts[a] - s_pos_counts[a];
+                if (lead > 1024L) lead = 1024L;
+                else if (lead < -1024L) lead = -1024L;
+                s_tgt_slew[a] = s_pos_counts[a] + lead;
+            }
             continue;   /* 下一拍起按 kick 通道输出 */
         }
 
@@ -780,10 +832,24 @@ void joint_isr(void)
             s_integral[a] += pe;
             if (s_integral[a] > JOINT_I_LIMIT) s_integral[a] = JOINT_I_LIMIT;
             if (s_integral[a] < -JOINT_I_LIMIT) s_integral[a] = -JOINT_I_LIMIT;
+        } else if (s_integral[a] != 0L) {
+            /* [AI] A33 死区积分泄放：pe==0 时旧代码冻结积分——若之前粘滑爬行把
+               积分泵到 ±限幅（60% 占空比），关会带着巨大占空比"呆顶"（台架实录
+               back0a：积分泵满后关节滑落再被 40~60% 反向占空比硬拉回）。
+               每 ms 泄 200 counts·ms → 满积分 ~1.5 s 泄完，期间误差出死区则
+               立即恢复常规积分。 */
+            int32_t leak = (s_integral[a] > 0L) ? -200 : 200;
+            s_integral[a] += leak;
+            if ((leak < 0L && s_integral[a] < 0L) || (leak > 0L && s_integral[a] > 0L)) {
+                s_integral[a] = 0;
+            }
         }
 
         int32_t cmd = (pe * JOINT_KP_NUM) / JOINT_KP_DEN +
                       (s_integral[a] * JOINT_KI_NUM) / JOINT_KI_DEN;
+        /* [AI] A33 占空比地板（|pe|>3° 才生效）：维持滑行，见 JOINT_DUTY_FLOOR 注释 */
+        if (pe > 500L && cmd < JOINT_DUTY_FLOOR) cmd = JOINT_DUTY_FLOOR;
+        else if (pe < -500L && cmd > -JOINT_DUTY_FLOOR) cmd = -JOINT_DUTY_FLOOR;
         if (cmd > JOINT_DUTY_LIM) cmd = JOINT_DUTY_LIM;
         if (cmd < -JOINT_DUTY_LIM) cmd = -JOINT_DUTY_LIM;
 
