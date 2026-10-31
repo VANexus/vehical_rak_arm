@@ -68,6 +68,7 @@ AccessType=ro
 DefaultValue=0x00000000
 PDOMapping=0
 
+;CO_countLabel=NMT
 
 [1001]
 ParameterName=Error register
@@ -78,6 +79,7 @@ AccessType=ro
 DefaultValue=0x00
 PDOMapping=1
 
+;CO_countLabel=EM
 
 [1003]
 ParameterName=Pre-defined error field
@@ -95,6 +97,7 @@ AccessType=rw
 DefaultValue=0x00000080
 PDOMapping=0
 
+;CO_countLabel=SYNC
 
 [1006]
 ParameterName=Communication cycle period
@@ -105,6 +108,7 @@ AccessType=rw
 DefaultValue=0
 PDOMapping=0
 
+;CO_countLabel=SYNC_PROD
 
 [1007]
 ParameterName=Synchronous window length
@@ -122,6 +126,7 @@ ObjectType=0x8
 ;StorageLocation=RAM
 SubNumber=0x5
 
+;CO_countLabel=STORAGE
 
 [1011]
 ParameterName=Restore default parameters
@@ -139,6 +144,7 @@ AccessType=rw
 DefaultValue=0x00000100
 PDOMapping=0
 
+;CO_countLabel=TIME
 
 [1014]
 ParameterName=COB-ID EMCY
@@ -149,6 +155,7 @@ AccessType=rw
 DefaultValue=0x80+$NODEID
 PDOMapping=0
 
+;CO_countLabel=EM_PROD
 
 [1015]
 ParameterName=Inhibit time EMCY
@@ -166,6 +173,7 @@ ObjectType=0x8
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x9
 
+;CO_countLabel=HB_CONS
 
 [1017]
 ParameterName=Producer heartbeat time
@@ -176,7 +184,7 @@ AccessType=rw
 DefaultValue=1000
 PDOMapping=0
 
-CountLabel=HB_PROD
+;CO_countLabel=HB_PROD
 
 [1018]
 ParameterName=Identity
@@ -202,7 +210,7 @@ ObjectType=0x9
 ;StorageLocation=RAM
 SubNumber=0x3
 
-CountLabel=SDO_SRV
+;CO_countLabel=SDO_SRV
 
 [1280]
 ParameterName=SDO client parameter
@@ -210,7 +218,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x4
 
-CountLabel=SDO_CLI
+;CO_countLabel=SDO_CLI
 
 [1400]
 ParameterName=RPDO communication parameter
@@ -218,7 +226,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x4
 
-CountLabel=RPDO
+;CO_countLabel=RPDO
 
 [1401]
 ParameterName=RPDO communication parameter
@@ -226,7 +234,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x4
 
-CountLabel=RPDO
+;CO_countLabel=RPDO
 
 [1402]
 ParameterName=RPDO communication parameter
@@ -234,7 +242,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x4
 
-CountLabel=RPDO
+;CO_countLabel=RPDO
 
 [1403]
 ParameterName=RPDO communication parameter
@@ -242,7 +250,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x4
 
-CountLabel=RPDO
+;CO_countLabel=RPDO
 
 [1600]
 ParameterName=RPDO mapping parameter
@@ -278,7 +286,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x6
 
-CountLabel=TPDO
+;CO_countLabel=TPDO
 
 [1801]
 ParameterName=TPDO communication parameter
@@ -286,7 +294,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x6
 
-CountLabel=TPDO
+;CO_countLabel=TPDO
 
 [1802]
 ParameterName=TPDO communication parameter
@@ -294,7 +302,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x6
 
-CountLabel=TPDO
+;CO_countLabel=TPDO
 
 [1803]
 ParameterName=TPDO communication parameter
@@ -302,7 +310,7 @@ ObjectType=0x9
 ;StorageLocation=PERSIST_COMM
 SubNumber=0x6
 
-CountLabel=TPDO
+;CO_countLabel=TPDO
 
 [1A00]
 ParameterName=TPDO mapping parameter

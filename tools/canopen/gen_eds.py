@@ -86,6 +86,64 @@ def set_value(sec, key, value):
     sec["lines"].append(f"{key}={value}")
 
 
+def set_prop(sec, key, value):
+    """[AI] 编辑器属性注释行（;key=value）——EDSSharp 的 props 解析只认
+    分号前缀的属性行（参见 CANopenEditor libEDSsharp/eds.cs props 解析），
+    裸键 CO_countLabel= 会被静默忽略 → OD_CNT_* 宏整组缺失、栈编译 #error。"""
+    if sec is None:
+        return
+    tag = f";{key}="
+    for i, line in enumerate(sec["lines"]):
+        if line.startswith(tag):
+            sec["lines"][i] = f"{tag}{value}"
+            return
+    sec["lines"].append(f"{tag}{value}")
+
+
+def inject_od_cnt(eds_path, od_h_path, odname="OD"):
+    """[AI] 从 EDS 的 ;CO_countLabel 属性推导 OD_CNT_* 宏并注入 OD.h。
+
+    背景:CANopenEditor v4.2.3 的纯 EDS 路径不输出计数宏(计数属性只在
+    XDD 工程路径解析),而 CANopenNode v4 的 CANopen.c 用
+    #if OD_CNT_xxx 做编译期一致性检查——缺一组就 #error,整个工程编不过。
+    本步骤按导出器 VerifyCountLabel 同款"索引→标签"规则对 EDS 计数,
+    把 #define OD_CNT_<label> <n> 补进 OD.h 的 include guard 之后,
+    数值与 EDS 单一来源严格一致;NMT/EM/HB_PROD 三个硬性=1 的缺失直接报错。
+    """
+    import re as _re
+    counts = {}
+    cur_base = None
+    for raw in open(eds_path, encoding="utf-8", errors="replace"):
+        line = raw.strip()
+        m = _re.match(r"^\[([0-9A-Fa-f]{1,4})(sub[0-9]+)?\]$", line)
+        if m:
+            cur_base = int(m.group(1), 16) if m.group(2) is None else cur_base
+            continue
+        m = _re.match(r"^;CO_countLabel=([A-Z_0-9]+)$", line)
+        if m and cur_base is not None:
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    for mandatory in ("NMT", "EM", "HB_PROD"):
+        if counts.get(mandatory, 0) != 1:
+            raise SystemExit(f"[gen_eds] OD_CNT_{mandatory} 计数异常: "
+                             f"{counts.get(mandatory, 0)}(必须=1)——检查 EDS 是否缺 "
+                             f"0x1000/0x1001/0x1017")
+    block = "".join(f"#define {odname}_CNT_{k} {v}\n"
+                    for k, v in sorted(counts.items()))
+    text = open(od_h_path, encoding="utf-8", errors="replace").read()
+    text = text.replace("\r\n", "\n")
+    guard = f"#define {odname}_H\n"
+    if guard not in text:
+        raise SystemExit(f"[gen_eds] {od_h_path} 里找不到 include guard {guard}")
+    if f"#define {odname}_CNT_NMT" in text:
+        print("[gen_eds] OD_CNT 计数宏已存在,跳过注入")
+        return
+    text = text.replace(guard, guard + "\n/* [AI] OD_CNT_* 由 gen_eds.py inject_od_cnt 从 EDS 计数注入\n"
+                        "   (CANopenEditor 纯 EDS 路径不输出这些宏,见函数 docstring) */\n" + block, 1)
+    open(od_h_path, "w", encoding="utf-8", newline="\n").write(text)
+    print(f"[gen_eds] OD_CNT 注入完成: " +
+          ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+
+
 def set_manufacturer_list(sections, indices):
     sec = find(sections, "ManufacturerObjects")
     if sec is None:
@@ -99,7 +157,7 @@ def set_manufacturer_list(sections, indices):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):   # [AI] R34 链:第 4 参数可选=OD.h 路径(注入 OD_CNT 宏)
         print(__doc__)
         return 2
 
@@ -125,9 +183,17 @@ def main():
     set_value(di, "BaudRate_1000", "1")
 
     # --- 心跳 / 身份 / 通信对象 CountLabel（官方导出器要求）---
-    set_value(find(sections, "1017"), "CountLabel", "HB_PROD")
-    set_value(find(sections, "1200"), "CountLabel", "SDO_SRV")
-    set_value(find(sections, "1280"), "CountLabel", "SDO_CLI")
+    set_prop(find(sections, "1017"), "CO_countLabel", "HB_PROD")
+    set_prop(find(sections, "1200"), "CO_countLabel", "SDO_SRV")
+    set_prop(find(sections, "1280"), "CO_countLabel", "SDO_CLI")
+    set_prop(find(sections, "1000"), "CO_countLabel", "NMT")
+    set_prop(find(sections, "1001"), "CO_countLabel", "EM")
+    set_prop(find(sections, "1005"), "CO_countLabel", "SYNC")
+    set_prop(find(sections, "1006"), "CO_countLabel", "SYNC_PROD")
+    set_prop(find(sections, "1010"), "CO_countLabel", "STORAGE")
+    set_prop(find(sections, "1012"), "CO_countLabel", "TIME")
+    set_prop(find(sections, "1014"), "CO_countLabel", "EM_PROD")
+    set_prop(find(sections, "1016"), "CO_countLabel", "HB_CONS")
     set_value(find(sections, "1017"), "DefaultValue", "1000")
     ident = find(sections, "1018")
     set_value(ident, "DefaultValue", "0") if ident else None
@@ -200,10 +266,10 @@ def main():
         r_base = 0x200 + i * 0x100
         t_base = 0x180 + i * 0x100
         r_name, t_name = f"rpdo{i + 1}", f"tpdo{i + 1}"
-        set_value(find(sections, f"{0x1400 + i:04X}"), "CountLabel", "RPDO")
+        set_prop(find(sections, f"{0x1400 + i:04X}"), "CO_countLabel", "RPDO")
         set_value(find(sections, f"{0x1400 + i:04X}sub1"), "DefaultValue",
                   f"0x{r_base:03X}" if r_name in pdo else f"0x{0x80000000 | r_base:08X}")
-        set_value(find(sections, f"{0x1800 + i:04X}"), "CountLabel", "TPDO")
+        set_prop(find(sections, f"{0x1800 + i:04X}"), "CO_countLabel", "TPDO")
         set_value(find(sections, f"{0x1800 + i:04X}sub1"), "DefaultValue",
                   f"0x{t_base:03X}" if t_name in pdo else f"0x{0x80000000 | t_base:08X}")
         set_value(find(sections, f"{0x1800 + i:04X}sub2"), "DefaultValue",
@@ -238,9 +304,9 @@ def main():
             raise SystemExit(f"{name} mapping is {total_bits} bits > 64")
         set_value(find(sections, f"{map_base:04X}sub0"), "DefaultValue", str(len(entries)))
         if name.startswith("rpdo"):
-            set_value(find(sections, f"{com_base:04X}"), "CountLabel", "RPDO")
+            set_prop(find(sections, f"{com_base:04X}"), "CO_countLabel", "RPDO")
         else:
-            set_value(find(sections, f"{com_base:04X}"), "CountLabel", "TPDO")
+            set_prop(find(sections, f"{com_base:04X}"), "CO_countLabel", "TPDO")
             set_value(find(sections, f"{com_base:04X}sub2"), "DefaultValue",
                       str(int(tpdo_types.get(name, 254))))
 
@@ -249,6 +315,11 @@ def main():
     # LF 规范冲突，会让 canopen_gate 的"EDS 逐字重生成比对"在 Windows 上假失败。
     out_path.write_text(dump_eds(sort_object_sections(sections)), newline="\n")
     print(f"[gen_eds] {manifest['node']}: {len(objs)} app objects -> {out_path}")
+
+    # [AI] R34 链:可选第 4 参数=EDSSharp 产出的 OD.h;给定则把 CANopenNode
+    # 要求的 OD_CNT_* 计数宏从 EDS 标签推导注入(纯 EDS 路径编辑器不吐这些宏)。
+    if len(sys.argv) >= 5:
+        inject_od_cnt(out_path, Path(sys.argv[4]))
     return 0
 
 
