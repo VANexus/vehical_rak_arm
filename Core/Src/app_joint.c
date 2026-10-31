@@ -742,8 +742,12 @@ void joint_isr(void)
         if (v_des > JOINT_V_MAX) v_des = JOINT_V_MAX;
         else if (v_des < -JOINT_V_MAX) v_des = -JOINT_V_MAX;
 
-        /* 3) 速度测量：1 kHz 位置差分（track_motion 本拍已更新 pos_prev_1k） */
+        /* 3) 速度测量：1 kHz 位置差分（track_motion 本拍已更新 pos_prev_1k）。
+           毛刺钳位：单拍 |Δ|>30 counts（≈175°/s）超出机械可能，按编码器毛刺
+           处理——不钳位的话速度 P 会对毛刺打出反向满占空比（J1"自己动"的根因）。 */
         int32_t v_meas = s_pos_counts[a] - s_pos_prev_1k[a];
+        if (v_meas > 30L) v_meas = 30L;
+        else if (v_meas < -30L) v_meas = -30L;
 
         /* 4) 摩擦前馈（随速度比例，巡航底）+ 速度 P */
         int32_t ff = JOINT_KVFF * v_des;
