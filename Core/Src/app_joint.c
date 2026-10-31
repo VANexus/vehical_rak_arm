@@ -117,10 +117,14 @@ static const int32_t kJointLimitMaxDeg10[JOINT_COUNT] = { 2700, 1350 }; /* J2 �
 #define JOINT_BOOST_MS     100L    /* 破静摩擦助推：想动但 |v_meas|≤1 c/ms 持续 100ms →
                                     全力 95% 直到动起来（|v_meas|≥2 释放）。有速度反馈
                                     闸门，无 A33 交棒竞速 */
+#define JOINT_BOOST_ERR_MIN 350L  /* [AI] A36：助推的最小误差门槛（350 counts ≈ 2°）——
+                                    微小误差（0.05° 级）也触发 95% 助推 → 过冲 → 反向 →
+                                    极限环抖振（台架实录），大误差才配破静摩擦 */
 #define JOINT_KI_NUM     1L      /* 位置积分（消稳态差/抗重力）：单位误差·ms → 0.01% */
 #define JOINT_KI_DEN    50L
 #define JOINT_I_LIMIT   120000L  /* 积分限幅（counts·ms）≈ 100 counts 误差持续 3 s */
-#define JOINT_DEADBAND     8L    /* counts，≈0.05°：死区内冻结积分+泄放，防研磨 */
+#define JOINT_DEADBAND    24L    /* [AI] A36：8→24 counts（0.05°→0.14°）——死区内 v_des=0
+                                    （见速度环段），±1 count 量化噪声不再出满速指令 */
 #define JOINT_DUTY_LIM  9500L    /* 0.01% → 95%（A19：台架实录 J1 静摩擦下 85% 零位移） */
 #define JOINT_SLEW_Q    2000L    /* 每 1 ms 允许的占空比变化（0.01%）→ 20%/ms 斜坡 */
 /* 每 1 kHz 拍最多 6 counts ≈ 35°/s（35°/s × 170.7 counts/° ÷ 1000 ≈ 5.98）。
@@ -742,8 +746,12 @@ void joint_isr(void)
             continue;
         }
 
-        /* 2) 速度设定：位置误差 → 限速速度（counts/ms） */
+        /* 2) 速度设定：位置误差 → 限速速度（counts/ms）。
+           [AI] A36：死区内 v_des=0——位置 P 对 ±1 count 量化噪声照样出速度
+           指令（KPP_SHIFT=3 时 8 counts 即满速），是目标附近抖振的主源；
+           死区内改由积分/刹车保持（积分在死区内本就冻结+泄放）。 */
         int32_t v_des = err >> JOINT_KPP_SHIFT;
+        if (err < JOINT_DEADBAND && err > -JOINT_DEADBAND) v_des = 0L;
         if (v_des > JOINT_V_MAX) v_des = JOINT_V_MAX;
         else if (v_des < -JOINT_V_MAX) v_des = -JOINT_V_MAX;
 
@@ -760,8 +768,12 @@ void joint_isr(void)
 
         /* 4b) 破静摩擦助推：想动（|v_des|>0）但 100ms 没动（|v_meas|≤1 c/ms）→
            全力 95% 直到动起来（|v_meas|≥2 释放）。速度反馈闸门 = 动起来的瞬间
-           自然交棒，无 A33 的 handoff 竞速。助推期冻结位置积分（防泵入过冲）。 */
-        if (v_des != 0L && v_meas <= 1L && v_meas >= -1L) {
+           自然交棒，无 A33 的 handoff 竞速。助推期冻结位置积分（防泵入过冲）。
+           [AI] A36：加 |err|≥JOINT_BOOST_ERR_MIN（2°）门槛——微小误差触发的
+           95% 助推是目标附近极限环抖振的第二主源。 */
+        if (v_des != 0L &&
+            (err > JOINT_BOOST_ERR_MIN || err < -JOINT_BOOST_ERR_MIN) &&
+            v_meas <= 1L && v_meas >= -1L) {
             if (s_boost_ms[a] < 32767) s_boost_ms[a]++;
             if (s_boost_ms[a] > 8000) {
                 /* 95% 助推 8s 仍不动 = 真堵转（语义明确，无竞速） */
