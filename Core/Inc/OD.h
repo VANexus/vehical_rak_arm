@@ -54,6 +54,28 @@
 /*******************************************************************************
     Sizes of OD arrays
 *******************************************************************************/
+/* [AI] A34 stopgap（2026-10-31）：补齐顶层 OD_CNT_* 计数宏——本文件此前只有
+   OD_CNT_ARR_*（数组尺寸），缺 CANopenNode CO_config 需要的顶层计数宏。Linux/GCC
+   的 include 解析恰好让栈 TU 吃到 CANopenNode_STM32/OD.h（工具生成的模板，宏齐全）
+   而应用 TU 吃到本文件，碰巧能编；任何解析顺序不同的环境（他人 Windows/MSVC）
+   即报 "OD_CNT_NMT undeclared"。数值按本 OD 对象表逐项核对（0x1005/1006/1007
+   SYNC、0x1012 TIME、0x1280 SDO 客户端、0x1016/1017 HB、4×RPDO/TPDO），与仓内
+   CANopenNode_STM32/OD.h 模板值一致。正式收口 = 按 third_party/canopen/PATCHES.md
+   "OD 生成流程" 用 EDSSharp 从 arm.eds 重生成后整体替换本文件与 OD.c。 */
+#define OD_CNT_NMT 1
+#define OD_CNT_EM 1
+#define OD_CNT_SYNC 1
+#define OD_CNT_SYNC_PROD 1
+#define OD_CNT_STORAGE 1
+#define OD_CNT_TIME 1
+#define OD_CNT_EM_PROD 1
+#define OD_CNT_HB_CONS 1
+#define OD_CNT_HB_PROD 1
+#define OD_CNT_SDO_SRV 1
+#define OD_CNT_SDO_CLI 1
+#define OD_CNT_RPDO 4
+#define OD_CNT_TPDO 4
+
 #define OD_CNT_ARR_1003 16
 #define OD_CNT_ARR_1010 4
 #define OD_CNT_ARR_1011 4
