@@ -48,10 +48,10 @@ python3 tools/canopen_bringup.py --can can0 --seconds 3 --no-drive   # NMT/SYNC/
 > 与 v5 板子不兼容，联调暂用上面的 `canopen_bringup.py`（生产主站 = 待办 P3）。
 
 
-> **本仓的 git 仓名是历史遗留的 `vehical_rak_edge_ai`**：2026-10-14 曾把「机械臂板」
-> 重命名成「边缘 AI 推理节点」；**2026-10-28 恢复双板架构**，本仓重新担任
-> **机械臂板 `vehical_rak_arm`** 的角色（CMake 工程名、目标产物、`.ioc` 都叫
-> `vehical_rak_arm`）。GitHub 仓名与目录名沿用旧拼写，**不要再改名**（会打断团队链接）。
+> **仓名已统一（2026-11-14）**：2026-10-14 曾把本仓改名「边缘 AI 推理节点」
+> （`vehical_rak_edge_ai`）；**2026-10-28 恢复双板架构**后又变回机械臂板。
+> 2026-11-14 正式改名为 **`vehical_rak_arm`** —— GitHub 仓名与本地目录现已一致
+> （CMake 工程名、目标产物、`.ioc` 从头到尾就叫 `vehical_rak_arm`）。用户故事：旧名只是历史误称。
 
 本板 = C30D 上的 **6 路舵机机械臂控制器**：接收 Jetson 下发的关节角（CAN v4 `ARM_CMD`），
 换算成舵机脉宽驱动机械臂，并把实测关节角、诊断量回报给 Jetson 与上位机 UI。
@@ -320,7 +320,7 @@ python3 -m serial.tools.miniterm /dev/ttyACM0 921600   # 或用 minicom/picocom
 `docs/BOARD-C30D.md`、`tools/can_check.py` **在两个 MCU 仓各存一份**，改动时**同一批**
 把姊妹仓 `vehical_rak_motion` 的那份一起改（手工 `cp`，内容保持一致），并在提交说明里写明。
 
-**远端**：`https://github.com/VANexus/vehical_rak_edge_ai`（private，默认分支 `main`，
+**远端**：`https://github.com/VANexus/vehical_rak_arm`（private，默认分支 `main`，
 团队 `RAK-嵌入式开发组` 有 maintain）。协作：**开工先 `git pull`** → 改动 →
 **收工 `git add -A && git commit && git push`**；提交前必须 `python3 tools/can_check.py`
 与 `cmake --build --preset Debug / Release` 双双零问题。

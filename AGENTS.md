@@ -15,9 +15,8 @@
 > 与 v5 板子不兼容，联调暂用上面的 `canopen_bringup.py`（生产主站 = 待办 P3）。
 
 
-> **仓名历史遗留**：git 仓 / 目录叫 `vehical_rak_edge_ai`，但 2026-10-28 起本仓
-> **恢复为机械臂板 `vehical_rak_arm`** 的角色（CMake 工程名、产物、`.ioc` 都叫 `vehical_rak_arm`）。
-> 仓名与目录名**不要再改**（会打断团队链接与 CI）。
+> **仓名**：2026-11-14 由 `vehical_rak_edge_ai` 改名为 `vehical_rak_arm`（GitHub + 本地目录
+> 已一致）。本仓 = 机械臂板（CMake 工程名、产物、`.ioc` 都叫 `vehical_rak_arm`）。
 
 本仓 = C30D（STM32F407VET6 + 板载 AT8236）上的 **6 路舵机机械臂控制器**。
 与姊妹仓 `vehical_rak_motion`（**底盘板**：4 轮 25 kHz 闭环 + IMU）**完全同一块硬件**，

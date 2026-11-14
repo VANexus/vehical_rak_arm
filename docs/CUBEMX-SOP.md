@@ -1,4 +1,4 @@
-<!-- 本文为两个 MCU 仓（vehical_rak_motion 底盘 / vehical_rak_edge_ai=vehical_rak_arm 机械臂）共用的 CubeMX SOP。 -->
+<!-- 本文为两个 MCU 仓（`vehical_rak_motion` 底盘 / `vehical_rak_arm` 机械臂）共用的 CubeMX SOP。 -->
 <!-- 文中示例多取自底盘仓 vehical_rak_motion；机械臂仓把工程名/文件前缀换成 vehical_rak_arm 即可。 -->
 <!-- 例外说明：'25 kHz ISR 保持寄存器级' 只适用于底盘仓；机械臂仓无 25 kHz 回路。 -->
 

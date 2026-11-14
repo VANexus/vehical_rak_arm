@@ -13,7 +13,7 @@
 
 ## 0. 这个仓库是什么
 
-`vehical_rak_arm`（git 仓名历史遗留为 `vehical_rak_edge_ai`）= 轮趣 C30D（STM32F407VET6）
+`vehical_rak_arm`（2026-11-14 前叫 `vehical_rak_edge_ai`）= 轮趣 C30D（STM32F407VET6）
 上的 **6 路舵机机械臂控制器**固件。与底盘仓 `vehical_rak_motion`（4 轮 25 kHz 闭环 + IMU）
 **完全同一块硬件**，只角色不同；上位机是 `VANexus/rak`（Jetson，负责 IK/轨迹规划）。
 
